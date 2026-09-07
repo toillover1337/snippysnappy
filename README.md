@@ -1,6 +1,7 @@
 snippysnappy - lightweight screenshot capture with adjustable selection,free-hand edit (pen/highlighter), and OCR text extraction.
 
 Invocations:
+
     snippysnappy               
     
     Select mode: overlay on the monitor under your cursor, drag to select a region.
@@ -24,6 +25,7 @@ Dependencies:
     # tk use flag needed on python for tkinter support
 
     Make sure to create a snippysnappy.d folder in ~/.local/bin; script and logging goes here by default. For better calling, use this wrapper script written to PATH:
+    
 
     cat > ~/.local/bin/snippysnappy << 'EOF'
     #!/bin/bash
