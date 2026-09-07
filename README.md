@@ -40,12 +40,17 @@ Make sure to create a snippysnappy.d folder in ~/.local/bin; script and logging 
     chmod +x ~/.local/bin/snippysnappy
 
 Usage:
-    Write this file to ~/.local/bin/snippysnappy.d/snippysnappy.py; write wrapper as above.
-    chmod +x ~/.local/bin/snippysnappy.d/snippysnappy.py
-    snippysnappy                  # bind to Print
-    snippysnappy --fullscreen     # bind to Shift+Print
-    snippysnappy --window         # bind to Ctrl+Shift+Print
 
+    Write this file to ~/.local/bin/snippysnappy.d/snippysnappy.py; write wrapper as above.
+    
+    chmod +x ~/.local/bin/snippysnappy.d/snippysnappy.py
+     
+    snippysnappy                  # bind to Print
+    
+    snippysnappy --fullscreen     # bind to Shift+Print
+    
+    snippysnappy --window         # bind to Ctrl+Shift+Print
+    
 Logging:
   Logs to console always, and to LOG_PATH below unless that line is commented
   out. Uses a size-capped ROTATING log (appends across runs, only rotates to
