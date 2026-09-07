@@ -15,16 +15,22 @@ Invocations:
     Click a window to capture just its content, in a normal decorated window.
 
 Main toolbar:
+
     - Copy: straight to clipboard, no file written, closes immediately.
+    
     - Save: "Normal Save" (prompts for a filename, default snipsnap-<timestamp>, into ~/Pictures/Screenshots) or "Slop Save" (no prompt, fixed name slopsnap-<timestamp>.png, into a separate folder for quick/incidental shots). A checkbox (on by default) also copies to clipboard on save.
+    
     - Edit: color palette, Pen (opaque) or Highlighter (translucent), Done bakes it in.
+    
     - Extract Text: optionally paint over just the text you want OCR'd, then Run OCR; result is copied to clipboard.
+    
 
 Dependencies:
     media-gfx/maim x11-misc/xclip app-text/tesseract dev-python/pillow x11-misc/xdotool x11-apps/xrandr dev-lang/python
-    # tk use flag needed on python for tkinter support
+    
+# tk use flag needed on python for tkinter support
 
-    Make sure to create a snippysnappy.d folder in ~/.local/bin; script and logging goes here by default. For better calling, use this wrapper script written to PATH:
+Make sure to create a snippysnappy.d folder in ~/.local/bin; script and logging goes here by default. For better calling, use this wrapper script written to PATH:
     
 
     cat > ~/.local/bin/snippysnappy << 'EOF'
