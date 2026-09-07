@@ -2,10 +2,15 @@ snippysnappy - lightweight screenshot capture with adjustable selection,free-han
 
 Invocations:
     snippysnappy               
+    
     Select mode: overlay on the monitor under your cursor, drag to select a region.
+    
     snippysnappy --fullscreen  
+    
     Whole monitor under your cursor is captured and pre-selected immediately (no drag needed) in a normal decorated window; drag the corner handles if you want to crop it further.
+    
     snippysnappy --window      
+    
     Click a window to capture just its content, in a normal decorated window.
 
 Main toolbar:
