@@ -1,4 +1,4 @@
-snippysnappy - lightweight screenshot capture with adjustable selection,free-hand edit (pen/highlighter), and OCR text extraction.
+# snippysnappy - lightweight screenshot capture with adjustable selection,free-hand edit (pen/highlighter), and OCR text extraction.
 
 Invocations:
 
