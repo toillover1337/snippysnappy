@@ -21,7 +21,7 @@ Main toolbar:
 
 Dependencies:
     media-gfx/maim x11-misc/xclip app-text/tesseract dev-python/pillow x11-misc/xdotool x11-apps/xrandr dev-lang/python
-    # tk use flag needed on python for tkinter support
+    # gentoo packages listed; tk use flag needed on python for tkinter support
 
     Make sure to create a snippysnappy.d folder in ~/.local/bin; script and logging goes here by default. For better calling, use this wrapper script written to PATH:
 
@@ -66,13 +66,16 @@ LOG_BACKUP_COUNT = 3        # keep this many rotated-out old logs (snippysnappy.
 
 SCREENSHOT_DIR = Path.home() / "Pictures" / "Screenshots"
 SLOP_DIR = Path.home() / "Pictures" / "Slop-o-graphs"   # tweak if you want it elsewhere
-TEXT_DIR = Path("/tmp")   # saved OCR text lands here
+TEXT_DIR = Path("/tmp")   # quick/incidental OCR text lands here (Slop Save Text)
+SNIPTEXT_DIR = Path(__file__).resolve().parent / "sniptext"   # persistent OCR text lands here (Save Text), alongside the script
 SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
 HANDLE_SIZE = 8
 OCR_BRUSH_WIDTH = 18
 OCR_MASK_MIN_PADDING = 20   # px - minimum mask padding regardless of brush width
-TOOLBAR_HEIGHT = 60
+DEFAULT_COPY_ON_SAVE = True   # default state of the "Also copy to clipboard" checkbox on the Save/OCR-save screens
+OCR_RETURN_TO_TOOLBAR_AFTER_ACTION = True   # after Copy Text/Save Text, return to the main toolbar; Set to False to close the app immediately instead; (the original behavior) - "Close" on this screen; always closes immediately either way.
+TOOLBAR_HEIGHT = 90   # tall enough for the two-row Save layout (checkbox above buttons)
 MIN_POINT_DIST = 3   # px - skip adding a new stroke point closer than this to the last one
 MIN_WINDOW_WIDTH = 560   # decorated windows are at least this wide, so the toolbar always fits
 
@@ -137,7 +140,7 @@ def popen_logged(cmd, **kwargs):
 
 
 def capture_full_screen(path):
-    run_logged(["maim", "-f", "png", str(path)], check=True)
+    run_logged(["maim", "-m", "1", "-f", "png", str(path)], check=True)
 
 
 def get_mouse_position():
@@ -191,7 +194,7 @@ def get_virtual_screen_bounds(monitors):
 
 
 def capture_monitor(x, y, w, h, path):
-    run_logged(["maim", "-g", f"{w}x{h}+{x}+{y}", "-f", "png", str(path)], check=True)
+    run_logged(["maim", "-m", "1", "-g", f"{w}x{h}+{x}+{y}", "-f", "png", str(path)], check=True)
 
 
 def select_window_id():
@@ -213,7 +216,7 @@ def get_window_geometry(window_id):
 
 
 def capture_window(window_id, path):
-    run_logged(["maim", "-i", window_id, "-f", "png", str(path)], check=True)
+    run_logged(["maim", "-m", "1", "-i", window_id, "-f", "png", str(path)], check=True)
 
 
 def copy_image_to_clipboard(path):
@@ -324,11 +327,6 @@ def show_toast_fallback(title, body):
 
 def notify(title, body="", allow_toast=True):
     if not allow_toast:
-        # Fire-and-forget: we don't act on success/failure here (no toast
-        # either way), so there's no reason to block waiting to find out.
-        # Waiting here was the actual source of a guaranteed ~1s delay on
-        # every launch when notify-send hangs, sitting right in the path
-        # between the keybind and the selection overlay appearing.
         popen_logged(["notify-send", title, body], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return
 
@@ -433,6 +431,10 @@ class SelectorApp:
         log.info(f"SelectorApp init: mode={mode} bounds={bounds} auto_select_full={auto_select_full}")
         self.root = root
         self.image_path = image_path
+        self.owned_temp_paths = [image_path]  # cleaned up when the window is destroyed - see _cleanup_temp_files
+        self._ocr_overlay = None
+        self._ocr_text_widget = None
+        self._ocr_copy_var = None
         self.mode = mode
         self.available_monitors = monitors or []
         self.current_monitor_name = current_monitor_name
@@ -459,6 +461,7 @@ class SelectorApp:
             cy = my + max((mh - total_h) // 2, 0)
             root.title("snippysnappy")
             root.geometry(f"{win_w}x{total_h}+{cx}+{cy}")
+            root.attributes("-topmost", True)
             self.toolbar_container = tk.Frame(root, bg="#222222", height=TOOLBAR_HEIGHT)
             self.toolbar_container.pack(side="bottom", fill="x")
             self.toolbar_container.pack_propagate(False)
@@ -494,12 +497,25 @@ class SelectorApp:
         self.baked_overlay_photo = None
         self.baked_overlay_photo_id = None
 
-        self.copy_on_save_var = tk.IntVar(value=1)
+        self.copy_on_save_var = tk.IntVar(value=int(DEFAULT_COPY_ON_SAVE))
 
         self.canvas.bind("<ButtonPress-1>", self.on_press)
         self.canvas.bind("<B1-Motion>", self.on_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
         root.bind("<Escape>", lambda e: (log.info("Escape pressed, destroying window"), root.destroy()))
+        root.bind("<Destroy>", self._cleanup_temp_files)
+        root.bind("<Control-c>", lambda e: self._keybind_copy())
+        root.bind("<Control-s>", lambda e: self._keybind_slop_save())
+        root.bind("<Control-S>", lambda e: self._keybind_normal_save())
+        root.bind("<Control-e>", lambda e: self._keybind_edit())
+        root.bind("<Control-t>", lambda e: self._keybind_extract_text())
+        root.focus_force()
+        if mode == "monitor":
+            root.update_idletasks()
+            try:
+                root.grab_set_global()
+            except tk.TclError:
+                log.warning("grab_set_global() failed (window not yet viewable?) - falling back to focus_force() only")
 
         if auto_select_full:
             self.sel_coords = (0, 0, iw, ih)
@@ -522,19 +538,11 @@ class SelectorApp:
         bbox = self.canvas.bbox(self.reset_btn_items[0])
         if bbox is None:
             return False
-        pad = 10  # generous tolerance - a click on a ~20px button was missing
-                  # its exact bbox in real (imprecise) mouse use
+        pad = 10
         return (bbox[0] - pad) <= x <= (bbox[2] + pad) and (bbox[1] - pad) <= y <= (bbox[3] + pad)
 
     def on_press(self, event):
         if self.hit_reset_button(event.x, event.y):
-            # Clear any leftover rect from a PRIOR selection before returning.
-            # Without this, self.rect stays non-None, and the same
-            # press-release gesture that clicked this button still reaches
-            # on_drag/on_release afterward (mouse motion between press and
-            # release is normal, even for a "single click") - which then
-            # silently overwrites the just-applied reset using that stale
-            # rectangle's coordinates.
             if self.rect:
                 self.canvas.delete(self.rect)
                 self.rect = None
@@ -585,6 +593,10 @@ class SelectorApp:
         """
         from PIL import Image
         log.info("Selection finalized, transitioning to compact review window")
+        try:
+            self.root.grab_release()
+        except tk.TclError:
+            pass
         x1, y1, x2, y2 = (int(v) for v in self.sel_coords)
         full = Image.open(self.image_path)
         crop = full.crop((x1, y1, x2, y2))
@@ -600,6 +612,7 @@ class SelectorApp:
         _, mx, my, mw, mh = monitor_at_point(monitors, global_cx, global_cy)
 
         self.image_path = crop_path
+        self.owned_temp_paths.append(crop_path)
         self.img = tk.PhotoImage(file=str(crop_path))
 
         self.canvas.delete("all")
@@ -608,7 +621,7 @@ class SelectorApp:
 
         self.root.withdraw()
         self.root.overrideredirect(False)
-        self.root.attributes("-topmost", False)
+        self.root.attributes("-topmost", True)
         self.root.title("snippysnappy")
         win_w = max(new_iw, MIN_WINDOW_WIDTH)
         total_h = new_ih + TOOLBAR_HEIGHT
@@ -635,6 +648,58 @@ class SelectorApp:
         log.debug(f"Review window placed at {win_w}x{total_h}+{cx}+{cy} (image {new_iw}x{new_ih}) on monitor near ({global_cx:.0f},{global_cy:.0f})")
         self.draw_handles()
         self.show_main_toolbar()
+
+    def _keybind_copy(self):
+        if self.sel_coords is None:
+            return
+        if self._ocr_overlay is not None:
+            self.do_copy_text(self._ocr_overlay, self._ocr_text_widget)
+        else:
+            self.do_copy()
+
+    def _keybind_slop_save(self):
+        if self.sel_coords is None:
+            return
+        if self._ocr_overlay is not None:
+            self.do_slop_save_text()
+        else:
+            self.do_slop_save()
+
+    def _keybind_normal_save(self):
+        if self.sel_coords is None:
+            return
+        if self._ocr_overlay is not None:
+            self.begin_normal_save_text()
+        else:
+            self.begin_normal_save()
+
+    def _keybind_edit(self):
+        if self.sel_coords is None or self._ocr_overlay is not None:
+            return
+        self.enter_edit_mode()
+
+    def _keybind_extract_text(self):
+        if self.sel_coords is None or self._ocr_overlay is not None:
+            return
+        self.enter_ocr_paint_mode()
+
+    def _cleanup_temp_files(self, event=None):
+        """Removes incidental temp files this app created (the initial
+        capture, any crop from transition_to_review, any monitor-switch
+        recapture) once the window is actually destroyed - regardless of
+        which action (Copy, Save, Cancel, Escape, OCR Close) triggered it.
+        Never touches anything the user explicitly saved (Screenshots,
+        Slop-o-graphs, sniptext) or do_copy's clipboard temp file (that one
+        is deliberately excluded from owned_temp_paths - xclip needs to
+        keep serving it as a detached background process after we exit).
+        """
+        if event is not None and event.widget != self.root:
+            return
+        for p in self.owned_temp_paths:
+            try:
+                Path(p).unlink(missing_ok=True)
+            except Exception:
+                log.exception(f"Failed to clean up temp file {p} (non-fatal)")
 
     def redo_capture(self):
         """Restarts the whole capture flow from scratch by re-running the
@@ -754,12 +819,15 @@ class SelectorApp:
             frame.place(x=max(x1, 0), y=ty)
 
     def show_main_toolbar(self):
+        self._ocr_overlay = None
+        self._ocr_text_widget = None
+        self._ocr_copy_var = None
         self.clear_toolbar()
         frame = self.new_toolbar_frame()
-        tk.Button(frame, text="Save", command=self.show_save_options).pack(side="left", padx=4, pady=4)
         tk.Button(frame, text="Copy", command=self.do_copy).pack(side="left", padx=4, pady=4)
-        tk.Button(frame, text="Extract Text", command=self.enter_ocr_paint_mode).pack(side="left", padx=4, pady=4)
+        tk.Button(frame, text="Save", command=self.show_save_options).pack(side="left", padx=4, pady=4)
         tk.Button(frame, text="Edit", command=self.enter_edit_mode).pack(side="left", padx=4, pady=4)
+        tk.Button(frame, text="Extract Text", command=self.enter_ocr_paint_mode).pack(side="left", padx=4, pady=4)
         if self.mode == "fullscreen" and len(self.available_monitors) > 1:
             self._add_monitor_dropdown(frame)
         else:
@@ -788,10 +856,13 @@ class SelectorApp:
 
         old_path = self.image_path
         self.image_path = new_path
+        self.owned_temp_paths.append(new_path)
         self.img = tk.PhotoImage(file=str(new_path))
         try:
             if old_path and Path(old_path).exists():
                 Path(old_path).unlink()
+            if old_path in self.owned_temp_paths:
+                self.owned_temp_paths.remove(old_path)
         except Exception:
             log.exception("Could not remove previous monitor capture temp file (non-fatal)")
 
@@ -1151,6 +1222,7 @@ class SelectorApp:
         self.clear_toolbar()
         overlay = tk.Frame(self.root, bg="#1a1a1a")
         overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self._ocr_overlay = overlay
 
         tk.Label(
             overlay, text="Extracted Text", fg="white", bg="#1a1a1a",
@@ -1160,66 +1232,130 @@ class SelectorApp:
         text_widget = tk.Text(overlay, wrap="word")
         text_widget.insert("1.0", text if text else "(no text detected)")
         text_widget.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+        self._ocr_text_widget = text_widget
 
-        text_copy_var = tk.IntVar(value=1)
-        tk.Checkbutton(
-            overlay, text="Also copy to clipboard when saving", variable=text_copy_var,
-            bg="#1a1a1a", fg="white", selectcolor="#444444",
-            activebackground="#1a1a1a", activeforeground="white",
-        ).pack(anchor="w", padx=16)
+        self._ocr_copy_var = tk.IntVar(value=int(DEFAULT_COPY_ON_SAVE))
 
-        btn_frame = tk.Frame(overlay, bg="#1a1a1a")
-        btn_frame.pack(fill="x", padx=16, pady=16)
+        self._ocr_btn_frame = tk.Frame(overlay, bg="#1a1a1a")
+        self._ocr_btn_frame.pack(fill="x", padx=16, pady=16)
+        self._show_ocr_main_buttons()
+
+    def _show_ocr_main_buttons(self):
+        for w in self._ocr_btn_frame.winfo_children():
+            w.destroy()
         tk.Button(
-            btn_frame, text="Copy Text",
-            command=lambda: self.do_copy_text(overlay, text_widget),
+            self._ocr_btn_frame, text="Copy Text",
+            command=lambda: self.do_copy_text(self._ocr_overlay, self._ocr_text_widget),
         ).pack(side="left", padx=4)
         tk.Button(
-            btn_frame, text="Save Text",
-            command=lambda: self.do_save_text(overlay, text_widget, text_copy_var),
+            self._ocr_btn_frame, text="Save Text",
+            command=self.show_text_save_options,
         ).pack(side="left", padx=4)
         tk.Button(
-            btn_frame, text="Back",
-            command=lambda: (log.info("OCR result: Back pressed, returning to paint mode"), overlay.destroy(), self.show_ocr_toolbar()),
+            self._ocr_btn_frame, text="Back",
+            command=lambda: (log.info("OCR result: Back pressed, returning to paint mode"), self._ocr_overlay.destroy(), self.show_ocr_toolbar()),
         ).pack(side="left", padx=4)
         tk.Button(
-            btn_frame, text="Close",
+            self._ocr_btn_frame, text="Close",
             command=lambda: (log.info("OCR result: Close pressed"), self.root.destroy()),
         ).pack(side="left", padx=4)
+
+    def show_text_save_options(self):
+        """Mirrors show_save_options for images: Normal Save (prompts for a
+        filename, into SNIPTEXT_DIR) or Slop Save (no prompt, into TEXT_DIR)."""
+        for w in self._ocr_btn_frame.winfo_children():
+            w.destroy()
+        check_row = tk.Frame(self._ocr_btn_frame, bg="#1a1a1a")
+        check_row.pack(side="top", fill="x")
+        tk.Checkbutton(
+            check_row, text="Also copy to clipboard", variable=self._ocr_copy_var,
+            bg="#1a1a1a", fg="white", selectcolor="#444444",
+            activebackground="#1a1a1a", activeforeground="white",
+        ).pack(side="left")
+        btn_row = tk.Frame(self._ocr_btn_frame, bg="#1a1a1a")
+        btn_row.pack(side="top", fill="x", pady=(4, 0))
+        tk.Button(btn_row, text="Normal Save", command=self.begin_normal_save_text).pack(side="left", padx=4)
+        tk.Button(btn_row, text="Slop Save", command=self.do_slop_save_text).pack(side="left", padx=4)
+        tk.Button(btn_row, text="Back", command=self._show_ocr_main_buttons).pack(side="left", padx=4)
+
+    def begin_normal_save_text(self):
+        for w in self._ocr_btn_frame.winfo_children():
+            w.destroy()
+        name_var = tk.StringVar(value=f"snippytext-{timestamp()}")
+        entry = tk.Entry(self._ocr_btn_frame, textvariable=name_var, width=28)
+        entry.pack(side="left", padx=4)
+        entry.focus_set()
+        tk.Button(
+            self._ocr_btn_frame, text="Confirm",
+            command=lambda: self.confirm_normal_save_text(name_var.get()),
+        ).pack(side="left", padx=4)
+        tk.Button(self._ocr_btn_frame, text="Cancel", command=self.show_text_save_options).pack(side="left", padx=4)
+
+    def confirm_normal_save_text(self, name):
+        content = self._ocr_text_widget.get("1.0", "end-1c")
+        name = name.strip() or f"snippytext-{timestamp()}"
+        if not name.lower().endswith(".txt"):
+            name += ".txt"
+        SNIPTEXT_DIR.mkdir(parents=True, exist_ok=True)
+        path = SNIPTEXT_DIR / name
+        path.write_text(content, encoding="utf-8")
+        log.info(f"Saved OCR text -> {path} ({len(content)} chars)")
+        also_copy = bool(self._ocr_copy_var.get())
+        self._ocr_overlay.destroy()
+        if also_copy:
+            copy_text_to_clipboard(content)
+            notify("Text copied to clipboard")
+        notify("Text saved", f"Saved as {path.name}")
+        if OCR_RETURN_TO_TOOLBAR_AFTER_ACTION:
+            self.show_main_toolbar()
+        else:
+            self.root.destroy()
+
+    def do_slop_save_text(self):
+        content = self._ocr_text_widget.get("1.0", "end-1c")
+        TEXT_DIR.mkdir(parents=True, exist_ok=True)
+        path = TEXT_DIR / f"slopsnaptext-{timestamp()}.txt"
+        path.write_text(content, encoding="utf-8")
+        log.info(f"Slop-saved OCR text -> {path} ({len(content)} chars)")
+        also_copy = bool(self._ocr_copy_var.get())
+        self._ocr_overlay.destroy()
+        if also_copy:
+            copy_text_to_clipboard(content)
+            notify("Text copied to clipboard")
+        notify("Slop text saved", f"Saved as {path.name}")
+        if OCR_RETURN_TO_TOOLBAR_AFTER_ACTION:
+            self.show_main_toolbar()
+        else:
+            self.root.destroy()
 
     def do_copy_text(self, overlay, text_widget):
         content = text_widget.get("1.0", "end-1c")
         log.info(f"Copy Text pressed ({len(content)} chars)")
         copy_text_to_clipboard(content)
         notify("Text copied to clipboard")
-        self.root.destroy()
-
-    def do_save_text(self, overlay, text_widget, copy_var):
-        content = text_widget.get("1.0", "end-1c")
-        TEXT_DIR.mkdir(parents=True, exist_ok=True)
-        path = TEXT_DIR / f"snippytext-{timestamp()}.txt"
-        path.write_text(content, encoding="utf-8")
-        log.info(f"Saved OCR text -> {path} ({len(content)} chars)")
-        also_copy = bool(copy_var.get())
-        self.root.destroy()
-        if also_copy:
-            copy_text_to_clipboard(content)
-            notify("Text copied to clipboard")
-        notify("Text saved", f"Saved as {path.name}")
+        overlay.destroy()
+        if OCR_RETURN_TO_TOOLBAR_AFTER_ACTION:
+            self.show_main_toolbar()
+        else:
+            self.root.destroy()
 
     # ---- save ----
 
     def show_save_options(self):
         self.clear_toolbar()
         frame = self.new_toolbar_frame()
-        tk.Button(frame, text="Normal Save", command=self.begin_normal_save).pack(side="left", padx=4, pady=4)
-        tk.Button(frame, text="Slop Save", command=self.do_slop_save).pack(side="left", padx=4, pady=4)
+        check_row = tk.Frame(frame, bg="#222222")
+        check_row.pack(side="top", fill="x")
         tk.Checkbutton(
-            frame, text="Also copy to clipboard", variable=self.copy_on_save_var,
+            check_row, text="Also copy to clipboard", variable=self.copy_on_save_var,
             bg="#222222", fg="white", selectcolor="#444444",
             activebackground="#222222", activeforeground="white",
-        ).pack(side="left", padx=8)
-        tk.Button(frame, text="Back", command=self.show_main_toolbar).pack(side="left", padx=4, pady=4)
+        ).pack(side="left", padx=8, pady=(4, 0))
+        btn_row = tk.Frame(frame, bg="#222222")
+        btn_row.pack(side="top", fill="x")
+        tk.Button(btn_row, text="Normal Save", command=self.begin_normal_save).pack(side="left", padx=4, pady=4)
+        tk.Button(btn_row, text="Slop Save", command=self.do_slop_save).pack(side="left", padx=4, pady=4)
+        tk.Button(btn_row, text="Back", command=self.show_main_toolbar).pack(side="left", padx=4, pady=4)
         self.finish_toolbar_placement(frame)
 
     def begin_normal_save(self):
