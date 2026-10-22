@@ -1,63 +1,74 @@
-# snippysnappy - lightweight screenshot capture with adjustable selection,free-hand edit (pen/highlighter), and OCR text extraction.
+# snippysnappy
 
-Invocations:
+Screenshot capture, annotation, OCR and screen recording for Linux desktops. It's written in Python/Tk and depends on very little: Python, Pillow and standard system tools.
 
-    snippysnappy               
-    
-    Select mode: overlay on the monitor under your cursor, drag to select a region.
-    
-    snippysnappy --fullscreen  
-    
-    Whole monitor under your cursor is captured and pre-selected immediately (no drag needed) in a normal decorated window; drag the corner handles if you want to crop it further.
-    
-    snippysnappy --window      
-    
-    Click a window to capture just its content, in a normal decorated window.
+- **Capture:** select a region (overlay across all monitors), a window, or the monitor under the mouse. You can also add a delay, open an existing image, or start from a blank canvas.
+- **Edit:** pen, highlighter, spray, shapes, text (with vim keys), snip/move, crop and resize, layers, undo/redo.
+- **OCR:** "Extract Text" runs tesseract and copies the result to the clipboard.
+- **Pins:** keep a capture floating on screen.
+- **Recording:** a region, window or monitor, with optional per-source audio tracks, and a film editor with trim, splice, drawing, Filmsnap, OCR and export.
+- **X11 and Wayland:**
+  - X11: Pillow/XCB, with maim as fallback.
+  - wlroots compositors (Sway, Hyprland, river, Wayfire, labwc): grim, slurp and wf-recorder.
+  - GNOME/KDE: the desktop portal, plus PipeWire for recording.
 
-Main toolbar:
+## Install
 
-    - Copy: straight to clipboard, no file written, closes immediately.
-    
-    - Save: "Normal Save" (prompts for a filename, default snipsnap-<timestamp>, into ~/Pictures/Screenshots) or "Slop Save" (no prompt, fixed name slopsnap-<timestamp>.png, into a separate folder for quick/incidental shots). A checkbox (on by default) also copies to clipboard on save.
-    
-    - Edit: color palette, Pen (opaque) or Highlighter (translucent), Done bakes it in.
-    
-    - Extract Text: optionally paint over just the text you want OCR'd, then Run OCR; result is copied to clipboard.
-    
+```sh
+curl -fsSLO https://raw.githubusercontent.com/toillover1337/snippysnappy/main/install.sh
+chmod +x install.sh
+./install.sh
+```
 
-Dependencies:
-    media-gfx/maim x11-misc/xclip app-text/tesseract dev-python/pillow x11-misc/xdotool x11-apps/xrandr dev-lang/python
-    
-# tk use flag needed on python for tkinter support
+Run it as your normal user, not with sudo. The installer:
 
-Make sure to create a snippysnappy.d folder in ~/.local/bin; script and logging goes here by default. For better calling, use this wrapper script written to PATH:
-    
+1. checks for dependencies and lists anything missing. It asks before installing them with your package manager (emerge, apt, dnf, pacman or zypper); this is the only step that uses `sudo`. On Gentoo it also writes the needed USE flags to `/etc/portage/package.use/snippysnappy`.
+2. downloads the latest tagged release, checks it, and installs it to `~/.local/bin/snippysnappy.d/`. It also adds the wrapper `~/.local/bin/snippysnappy`, a menu entry and an icon.
+3. on XFCE, offers to set up the keyboard shortcuts below.
 
-    cat > ~/.local/bin/snippysnappy << 'EOF'
-    #!/bin/bash
-    exec python3 "$HOME/.local/bin/snippysnappy/snippysnappy.py" "$@"
-    EOF
-    chmod +x ~/.local/bin/snippysnappy
+## Update, roll back, remove
 
-Usage:
+```sh
+~/.local/bin/snippysnappy.d/install.sh --check       # installed vs latest (exit code 10 = update available)
+~/.local/bin/snippysnappy.d/install.sh --update      # update to the latest release
+~/.local/bin/snippysnappy.d/install.sh --version v1.0.0   # install a specific release
+~/.local/bin/snippysnappy.d/install.sh --rollback    # go back to the previous version
+~/.local/bin/snippysnappy.d/install.sh --uninstall
+```
 
-    Write this file to ~/.local/bin/snippysnappy.d/snippysnappy.py; write wrapper as above.
-    
-    chmod +x ~/.local/bin/snippysnappy.d/snippysnappy.py
-     
-    snippysnappy                  # bind to Print
-    
-    snippysnappy --fullscreen     # bind to Shift+Print
-    
-    snippysnappy --window         # bind to Ctrl+Shift+Print
-    
-Logging:
-  Logs to console always, and to LOG_PATH below unless that line is commented
-  out. Uses a size-capped ROTATING log (appends across runs, only rotates to
-  a fresh file once it exceeds MAX_LOG_BYTES, keeping LOG_BACKUP_COUNT old
-  copies) rather than wiping on every single invocation - so a crash from a
-  few runs ago is still readable, not destroyed the instant you press the
-  hotkey again. If the file can't be opened for any reason, we log a warning
-  and continue with console-only logging rather than crashing.
+Each update keeps the previous version in `~/.local/bin/snippysnappy.d/backups/` (the newest 3 are kept). Your settings in `~/.config/snippysnappy/config.py` are never touched by updates. Other options: `--yes`, `--no-deps`, `--deps-only`, `--session x11|wayland|both`, `--shortcuts`, `--dry-run`, `--local DIR`.
 
-For more information, see commenting in the snippysnappy.py file.
+## Usage
+
+```
+snippysnappy                 select a region (Print)
+snippysnappy --window        a window (Ctrl+Print)
+snippysnappy --fullscreen    the monitor under the mouse (Super+Print)
+snippysnappy --delay [N]     select, then capture after N seconds (Shift+Print)
+snippysnappy --record        start/stop a recording (Alt+Print; add Ctrl=-w, Super=-f, Shift=-d)
+snippysnappy --open [FILE]   open an image (Super+Ctrl+Print)
+snippysnappy --nil           blank canvas (Super+Ctrl+Shift+Print)
+snippysnappy --version
+```
+
+`snippysnappy --help` lists everything. To change a setting, edit `~/.config/snippysnappy/config.py`; it is created with every option commented out the first time you run the program.
+
+## Dependencies
+
+| | |
+|---|---|
+| required | Python 3.9+ with Tk, Pillow |
+| recommended | ffmpeg (with libx264 and PulseAudio input) for recording and the film viewer, tesseract for OCR, notify-send, pactl/pacat for audio |
+| X11 | xclip, xdotool, xrandr, xprop, maim |
+| Wayland (wlroots) | grim, slurp, wl-clipboard, wlr-randr, wf-recorder (plus XWayland, which Tk needs) |
+| Wayland (GNOME/KDE) | xdg-desktop-portal with your desktop's backend, wl-clipboard, GStreamer with the PipeWire plugin (for recording) |
+
+### Wayland notes
+
+- On tiling compositors, snippysnappy windows float automatically (Sway/Hyprland). Turn this off with `WAYLAND_FLOAT_WINDOWS = False`.
+- On Sway, the Pins list's "View" button can only bring a window forward if you set `focus_on_window_activation focus`.
+- On GNOME/KDE, the desktop asks for permission the first time you take a screenshot or start a recording.
+
+## License
+
+GPL-3.0, see `LICENSE`.

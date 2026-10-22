@@ -1,2 +1,0 @@
-#!/bin/bash
-exec python3 "$HOME/.local/bin/snippysnappy.d/snippysnappy.py" "$@"
