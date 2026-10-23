@@ -1,4 +1,4 @@
-# snippysnappy v1.0.0
+# snippysnappy v1.0.1
 """
 Screen recording: the ffmpeg x11grab backend, a minimal standalone
 region-picker for plain select mode (deliberately NOT reusing

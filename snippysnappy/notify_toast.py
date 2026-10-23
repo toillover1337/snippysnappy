@@ -1,4 +1,4 @@
-# snippysnappy v1.0.0
+# snippysnappy v1.0.1
 """Desktop notifications (notify-send and an in-app toast fallback), D-Bus env fixups, and the timestamp() helper."""
 import os
 import subprocess

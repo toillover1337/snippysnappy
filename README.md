@@ -22,9 +22,15 @@ chmod +x install.sh
 
 Run it as your normal user, not with sudo. The installer:
 
-1. checks for dependencies and lists anything missing. It asks before installing them with your package manager (emerge, apt, dnf, pacman or zypper); this is the only step that uses `sudo`. On Gentoo it also writes the needed USE flags to `/etc/portage/package.use/snippysnappy`.
+1. checks for dependencies and lists anything missing. It asks before installing them with your package manager (emerge, apt, dnf, pacman, zypper, guix or nix); this is the only step that uses `sudo`. On Gentoo it also writes the needed USE flags to `/etc/portage/package.use/snippysnappy`.
 2. downloads the latest tagged release, checks it, and installs it to `~/.local/bin/snippysnappy.d/`. It also adds the wrapper `~/.local/bin/snippysnappy`, a menu entry and an icon.
 3. on XFCE, offers to set up the keyboard shortcuts below.
+
+### Nix and Guix
+
+The installer uses `nix profile install` (or `nix-env`) and `guix install`. These install into your user profile, so no sudo is needed. It installs Python as one environment that includes Tk and Pillow, and the `snippysnappy` wrapper runs that specific Python. On NixOS and Guix System it also prints a snippet for adding the dependencies to your system or home configuration. If you'd rather manage them that way, run it with `--no-deps --python /path/to/python3`.
+
+GNOME/KDE recording on Nix needs GStreamer's plugin path set up, which is easiest done in your NixOS configuration.
 
 ## Update, roll back, remove
 
@@ -36,7 +42,7 @@ Run it as your normal user, not with sudo. The installer:
 ~/.local/bin/snippysnappy.d/install.sh --uninstall
 ```
 
-Each update keeps the previous version in `~/.local/bin/snippysnappy.d/backups/` (the newest 3 are kept). Your settings in `~/.config/snippysnappy/config.py` are never touched by updates. Other options: `--yes`, `--no-deps`, `--deps-only`, `--session x11|wayland|both`, `--shortcuts`, `--dry-run`, `--local DIR`.
+Each update keeps the previous version in `~/.local/bin/snippysnappy.d/backups/` (the newest 3 are kept). Your settings in `~/.config/snippysnappy/config.py` are never touched by updates. Other options: `--yes`, `--no-deps`, `--deps-only`, `--session x11|wayland|both`, `--shortcuts`, `--python PATH`, `--dry-run`, `--local DIR`.
 
 ## Usage
 

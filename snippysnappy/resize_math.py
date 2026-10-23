@@ -1,4 +1,4 @@
-# snippysnappy v1.0.0
+# snippysnappy v1.0.1
 """Resize math shared by image and film objects (snips, text boxes, shapes)."""
 
 

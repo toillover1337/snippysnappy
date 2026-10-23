@@ -1,11 +1,11 @@
-# snippysnappy v1.0.0
+# snippysnappy v1.0.1
 """Configuration knobs: sizes, colors, defaults, file locations, feature toggles.
 """
 from pathlib import Path
 
 from ._paths import INSTALL_DIR
 
-SNIPPYSNAPPY_VERSION = "1.0.0"   # X.0.0 = "stable" release; 0.X.0 = feature addition/major tweak; 0.0.X = bug fix/small tweak. Reaching the digit "9" should increment to "10" e.g. x.x.9 -> x.x.10.
+SNIPPYSNAPPY_VERSION = "1.0.1"   # X.0.0 = "stable" release; 0.X.0 = feature addition/major tweak; 0.0.X = bug fix/small tweak. Reaching the digit "9" should increment to "10" e.g. x.x.9 -> x.x.10.
 
 LOG_PATH = INSTALL_DIR / "snippysnappy.log"   # Comment out this line to
                                               # disable file logging entirely.

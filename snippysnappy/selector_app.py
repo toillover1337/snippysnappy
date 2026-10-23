@@ -1,4 +1,4 @@
-# snippysnappy v1.0.0
+# snippysnappy v1.0.1
 """The main capture/annotation window - by far the largest module here (SelectorApp), covering selection, all edit tools (pen/highlight/spray/eraser/shape/text/snip), resize, OCR, magnify, measure, layers, tabs/windows panel, and the Pin toolbar entry point. Kept as one class/module rather than split further for this first compartmentalization pass - see HANDOVER.md."""
 import math
 import os

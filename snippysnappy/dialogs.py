@@ -1,4 +1,4 @@
-# snippysnappy v1.0.0
+# snippysnappy v1.0.1
 """Small dialogs shared by the image windows and the film window."""
 import tkinter as tk
 

@@ -1,4 +1,4 @@
-# snippysnappy v1.0.0
+# snippysnappy v1.0.1
 """Clipboard read/write for images and text (X11 and Wayland)."""
 import subprocess
 

@@ -1,4 +1,4 @@
-# snippysnappy v1.0.0
+# snippysnappy v1.0.1
 """Per-process private temp folders under a user-only cache directory, with cleanup of dead processes' leftovers."""
 import atexit
 import os

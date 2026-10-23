@@ -1,4 +1,4 @@
-# snippysnappy v1.0.0
+# snippysnappy v1.0.1
 """Text-tool font loading/caching and word-wrap/rendering helpers used when baking Text elements into the final image."""
 import re
 from pathlib import Path

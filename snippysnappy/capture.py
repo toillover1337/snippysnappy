@@ -1,4 +1,4 @@
-# snippysnappy v1.0.0
+# snippysnappy v1.0.1
 """Screen/monitor/window capture backends (X11 and Wayland), monitor geometry helpers, and the --delay countdown."""
 from pathlib import Path
 from .constants import DEFAULT_MONITOR_NAME
@@ -126,6 +126,63 @@ def write_png_async(img, path):
     th.start()
 
 
+def load_native(base, soname):
+    """
+    v1.0.1: a ctypes handle for lib<base>. ctypes.util.find_library() finds nothing on NixOS and
+    often on Guix (no ldconfig cache, libraries live in per-package store paths), so after it
+    try: the soname (works when Tk already mapped the library), libraries this process already
+    has mapped, the Nix/Guix profile lib folders, and finally the libraries that maim/xdotool/
+    xclip link against (ldd). A new handle per call, so callers' argtypes never clash.
+    """
+    import ctypes
+    import ctypes.util
+    cands = []
+    found = ctypes.util.find_library(base)
+    if found:
+        cands.append(found)
+    cands.append(soname)
+    prefix = f"lib{base}.so"
+    try:
+        with open("/proc/self/maps") as f:
+            for line in f:
+                path = line.rstrip("\n").split(None, 5)[-1] if line.count(" ") >= 5 else ""
+                if path.startswith("/") and os.path.basename(path).startswith(prefix):
+                    cands.append(path)
+    except OSError:
+        pass
+    home = os.path.expanduser("~")
+    for d in (f"{home}/.nix-profile/lib", "/run/current-system/sw/lib", "/etc/profiles/per-user/"
+              + os.environ.get("USER", "") + "/lib", f"{home}/.guix-profile/lib",
+              "/run/current-system/profile/lib", *os.environ.get("LD_LIBRARY_PATH", "").split(":")):
+        if d:
+            cands.append(os.path.join(d, soname))
+    tried = set()
+    for c in cands:
+        if c in tried:
+            continue
+        tried.add(c)
+        try:
+            return ctypes.CDLL(c)
+        except OSError:
+            pass
+    for tool in ("maim", "xdotool", "xclip"):
+        exe = shutil.which(tool)
+        if not exe:
+            continue
+        try:
+            out = subprocess.run(["ldd", exe], capture_output=True, text=True, timeout=5).stdout
+        except Exception:
+            continue
+        for line in out.splitlines():
+            parts = line.split()
+            if parts and parts[0].startswith(prefix) and "=>" in parts and len(parts) > parts.index("=>") + 1:
+                try:
+                    return ctypes.CDLL(parts[parts.index("=>") + 1])
+                except OSError:
+                    pass
+    raise OSError(f"{prefix} not found (find_library, soname, mapped libraries, Nix/Guix profiles, ldd)")
+
+
 # ---- patch 44: X11 capture in-process (Pillow XCB grab + libX11/libXfixes via ctypes), maim as fallback ----
 _X11 = {}
 
@@ -136,8 +193,8 @@ def _x11_libs():
         return _X11
     import ctypes
     import ctypes.util
-    x11 = ctypes.CDLL(ctypes.util.find_library("X11") or "libX11.so.6")
-    xf = ctypes.CDLL(ctypes.util.find_library("Xfixes") or "libXfixes.so.3")
+    x11 = load_native("X11", "libX11.so.6")
+    xf = load_native("Xfixes", "libXfixes.so.3")
 
     class CursorImage(ctypes.Structure):
         _fields_ = [("x", ctypes.c_short), ("y", ctypes.c_short),
@@ -698,10 +755,7 @@ class _X11EscapePoller:
     def __init__(self):
         import ctypes
         import ctypes.util
-        libname = ctypes.util.find_library("X11")
-        if not libname:
-            raise RuntimeError("libX11 not found")
-        self._x11 = ctypes.CDLL(libname)
+        self._x11 = load_native("X11", "libX11.so.6")
         self._x11.XOpenDisplay.restype = ctypes.c_void_p
         self._x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
         self._x11.XKeysymToKeycode.restype = ctypes.c_ubyte
@@ -756,11 +810,8 @@ class _X11FocusHelper:
     def __init__(self):
         import ctypes
         import ctypes.util
-        libname = ctypes.util.find_library("X11")
-        if not libname:
-            raise RuntimeError("libX11 not found")
         self._ctypes = ctypes
-        self._x11 = ctypes.CDLL(libname)
+        self._x11 = load_native("X11", "libX11.so.6")
         self._x11.XOpenDisplay.restype = ctypes.c_void_p
         self._x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
         self._x11.XSetInputFocus.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]

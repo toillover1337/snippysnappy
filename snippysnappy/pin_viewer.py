@@ -1,4 +1,4 @@
-# snippysnappy v1.0.0
+# snippysnappy v1.0.1
 """The floating Pin viewer window (run_pin_viewer) - a separate lightweight, borderless Tk window per pinned region, with hover-to-reveal controls, resize/lock/maximize/minimize, and cross-process discovery via the coordinator's pin registry."""
 import math
 import os

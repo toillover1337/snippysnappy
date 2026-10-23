@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# snippysnappy installer / updater v1.0.0
+# snippysnappy installer / updater v1.0.1
 #
 # Installs snippysnappy from GitHub (a tagged release, the latest by default), keeps it
 # updated, rolls back, or uninstalls. Run it as YOUR user - it only uses sudo for the
@@ -13,6 +13,7 @@
 #   ./install.sh --rollback       restore the previous version from backups/
 #   ./install.sh --uninstall      remove snippysnappy (asks about config, logs, backups)
 #   options: --yes (assume yes)  --no-deps  --deps-only  --session x11|wayland|both
+#            --python PATH (interpreter the wrapper runs; default: python3, or the Nix/Guix profile's)
 #            --shortcuts (XFCE keyboard shortcuts)  --dry-run (show what would happen)
 #
 # Layout (unchanged from earlier versions):
@@ -25,7 +26,7 @@
 
 set -uo pipefail
 
-INSTALLER_VERSION="1.0.0"
+INSTALLER_VERSION="1.0.1"
 REPO_URL="${SNIPPYSNAPPY_REPO:-https://github.com/toillover1337/snippysnappy}"
 INSTALL_DIR="${SNIPPYSNAPPY_DIR:-$HOME/.local/bin/snippysnappy.d}"
 WRAPPER="$HOME/.local/bin/snippysnappy"
@@ -35,6 +36,7 @@ BACKUP_DIR="$INSTALL_DIR/backups"
 KEEP_BACKUPS=3
 PROGRAM_FILES=(snippysnappy snippysnappy.py snippysnappy-icon.png VERSION install.sh)
 
+PY_ARG=""
 ACTION="install"; REF=""; LOCAL_SRC=""; ASSUME_YES=0; DEPS=1; DEPS_ONLY=0; SESSION=""; SHORTCUTS=0; DRY=0
 STEPS=()
 
@@ -81,6 +83,7 @@ while (($#)); do
         --session) SESSION="${2:?--session needs x11, wayland or both}"; shift ;;
         --shortcuts) SHORTCUTS=1 ;;
         --dry-run) DRY=1 ;;
+        --python) PY_ARG="${2:?--python needs a path}"; shift ;;
         -h|--help) usage ;;
         --installer-version) echo "$INSTALLER_VERSION"; exit 0 ;;
         *) echo "Unknown option: $1 (see --help)" >&2; exit 2 ;;
@@ -93,6 +96,17 @@ if [[ $EUID -eq 0 ]]; then
 fi
 [[ -n "$HOME" && -d "$HOME" ]] || die "\$HOME is not set to a directory."
 [[ -d "$INSTALL_DIR" ]] && LOG_FILE="$INSTALL_DIR/snippysnappy.log"
+
+# The interpreter that runs snippysnappy: --python / $SNIPPYSNAPPY_PYTHON, else whatever an existing
+# wrapper already pins (Nix/Guix installs pin the profile's python), else python3 from PATH.
+PY="${PY_ARG:-${SNIPPYSNAPPY_PYTHON:-}}"
+if [[ -z "$PY" && -f "$WRAPPER" ]]; then
+    _w=$(sed -n 's/^exec "\{0,1\}\(\/[^" ]*\)"\{0,1\} .*/\1/p' "$WRAPPER" | head -1)
+    [[ -n "$_w" && -x "$_w" ]] && PY="$_w"
+fi
+PY="${PY:-python3}"
+PY_PINNED=0; [[ "$PY" == /* ]] && PY_PINNED=1
+GUIX_ENV=0
 
 # ---------------------------------------------------------------- versions
 installed_version() {
@@ -159,7 +173,7 @@ verify_tree() {   # verify_tree DIR EXPECTED_VERSION(or empty)
     fi
     # refuse symlinks / anything escaping the tree
     if find "$d" -type l | grep -q .; then warn "release contains symlinks - refusing"; return 1; fi
-    python3 - "$d" <<'PY' || { warn "release does not byte-compile with $(python3 --version 2>&1)"; return 1; }
+    "$PY" - "$d" <<'PY' || { warn "release does not byte-compile with $("$PY" --version 2>&1)"; return 1; }
 import sys, pathlib
 base = pathlib.Path(sys.argv[1])
 bad = 0
@@ -174,7 +188,10 @@ PY
 
 # ---------------------------------------------------------------- dependencies
 detect_pkg_manager() {
-    local m; for m in emerge apt-get dnf pacman zypper; do command -v "$m" >/dev/null && { echo "$m"; return; }; done
+    [[ -n "${SNIPPYSNAPPY_PKG_MANAGER:-}" ]] && { echo "$SNIPPYSNAPPY_PKG_MANAGER"; return; }   # testing override
+    local m; for m in emerge apt-get dnf pacman zypper guix; do command -v "$m" >/dev/null && { echo "$m"; return; }; done
+    if command -v nix >/dev/null && nix profile list >/dev/null 2>&1; then echo nix-profile; return; fi
+    command -v nix-env >/dev/null && { echo nix-env; return; }
     echo unknown
 }
 
@@ -183,6 +200,38 @@ detect_session() {
     if [[ "$t" == wayland || -n "${WAYLAND_DISPLAY:-}" ]]; then echo wayland
     elif [[ "$t" == x11 || -n "${DISPLAY:-}" ]]; then echo x11
     else echo unknown; fi
+}
+
+os_id() { sed -n 's/^ID=//p' /etc/os-release 2>/dev/null | tr -d '"' | head -1; }
+
+nix_profile_python() {
+    local d; for d in "$HOME/.nix-profile" "${XDG_STATE_HOME:-$HOME/.local/state}/nix/profile" "/etc/profiles/per-user/${USER:-$(id -un)}"; do
+        [[ -x "$d/bin/python3" ]] && { echo "$d/bin/python3"; return; }
+    done
+}
+
+guix_env() {   # load the Guix profile so its python sees python-pillow / tk (GUIX_PYTHONPATH)
+    local prof="$HOME/.guix-profile"
+    [[ -f "$prof/etc/profile" ]] || return 0
+    GUIX_PROFILE="$prof"; export GUIX_PROFILE
+    # shellcheck disable=SC1091
+    . "$prof/etc/profile"
+    GUIX_ENV=1
+    [[ -x "$prof/bin/python3" && $PY_PINNED -eq 0 ]] && PY="$prof/bin/python3" && PY_PINNED=1
+    return 0
+}
+
+declarative_note() {   # NixOS / Guix System: the usual home for packages is the system/home config
+    case "$(os_id)" in
+        nixos) log "NixOS: to keep these declaratively, add to environment.systemPackages (or home.packages):"
+               echo "    (python3.withPackages (p: [ p.tkinter p.pillow ])) ffmpeg-full tesseract libnotify pulseaudio"
+               echo "    xclip xdotool xorg.xrandr xorg.xprop maim   # X11"
+               echo "    grim slurp wl-clipboard wlr-randr wf-recorder   # Wayland (wlroots)"
+               echo "  then run this installer with --no-deps --python /run/current-system/sw/bin/python3" ;;
+        guix)  log "Guix System: to keep these declaratively, add to the packages of your system or home configuration:"
+               echo "    python \"python:tk\" python-pillow ffmpeg tesseract-ocr libnotify pulseaudio"
+               echo "    xclip xdotool xrandr xprop maim   grim slurp wl-clipboard wlr-randr wf-recorder" ;;
+    esac
 }
 
 is_wlroots() { [[ -n "${SWAYSOCK:-}${HYPRLAND_INSTANCE_SIGNATURE:-}${WAYFIRE_SOCKET:-}" ]] \
@@ -209,7 +258,7 @@ declare -A WHAT=(
 
 have_req() {
     local c="${CHECK[$1]}"
-    if [[ "$c" == py:* ]]; then python3 -c "${c#py:}" >/dev/null 2>&1
+    if [[ "$c" == py:* ]]; then "$PY" -c "${c#py:}" >/dev/null 2>&1
     elif [[ "$1" == gst ]]; then command -v gst-launch-1.0 >/dev/null && gst-inspect-1.0 pipewiresrc >/dev/null 2>&1
     else command -v "$c" >/dev/null; fi
 }
@@ -250,6 +299,17 @@ pkgs_for() {   # pkgs_for MANAGER KEY -> package names (space separated)
         zypper:notify) echo "libnotify-tools" ;;         zypper:pulse) echo "pulseaudio-utils" ;;
         zypper:gst) echo "gstreamer-utils gstreamer-plugin-pipewire gstreamer-plugins-good gstreamer-plugins-bad gstreamer-plugins-ugly" ;;
 
+        guix:tk) echo "python python:tk" ;;               guix:pillow|guix:pillow-tk) echo "python-pillow" ;;
+        guix:tesseract) echo "tesseract-ocr" ;;          guix:notify) echo "libnotify" ;;
+        guix:pulse) echo "pulseaudio" ;;
+        guix:gst) echo "gstreamer gst-plugins-good gst-plugins-bad gst-plugins-ugly pipewire" ;;
+
+        nix-*:tk|nix-*:pillow|nix-*:pillow-tk) echo "@python" ;;   # one python3.withPackages env (below)
+        nix-*:ffmpeg) echo "ffmpeg-full" ;;              nix-*:tesseract) echo "tesseract" ;;
+        nix-*:notify) echo "libnotify" ;;                nix-*:pulse) echo "pulseaudio" ;;
+        nix-*:xrandr) echo "xorg.xrandr" ;;              nix-*:xprop) echo "xorg.xprop" ;;
+        nix-*:gst) echo "" ;;   # GStreamer plugins need GST_PLUGIN_PATH set up - see declarative_note
+
         *:ffmpeg) echo "ffmpeg" ;; *:xclip) echo "xclip" ;; *:xdotool) echo "xdotool" ;; *:xrandr) echo "xrandr" ;;
         *:xprop) echo "xprop" ;; *:maim) echo "maim" ;; *:grim) echo "grim" ;; *:slurp) echo "slurp" ;;
         *:wl-clipboard) echo "wl-clipboard" ;; *:wlr-randr) echo "wlr-randr" ;; *:wf-recorder) echo "wf-recorder" ;;
@@ -268,6 +328,7 @@ gentoo_use() {   # USE flags the program relies on
     printf '%s\n' "$want" | run sudo tee "$f" >/dev/null && ok "wrote $f"
 }
 
+NIX_PY_CMD=()
 install_deps() {
     local mgr session keys=() missing=() k pk pkgs=()
     mgr=$(detect_pkg_manager)
@@ -294,6 +355,7 @@ install_deps() {
         else printf '    MISS  %s\n' "${WHAT[$k]}"; missing+=("$k"); fi
     done
     if [[ "$mgr" == emerge ]] && ! ((DRY)); then gentoo_use; fi
+    [[ "$mgr" == guix || "$mgr" == nix-* ]] && declarative_note
     ((${#missing[@]})) || { ok "all dependencies present"; return 0; }
     if [[ "$mgr" == unknown ]]; then
         warn "no supported package manager found - install the MISS items above yourself"; return 0
@@ -314,12 +376,40 @@ install_deps() {
         dnf)     local cmd=(sudo dnf install "${pkgs[@]}") ;;
         pacman)  local cmd=(sudo pacman -S --needed "${pkgs[@]}") ;;
         zypper)  local cmd=(sudo zypper install "${pkgs[@]}") ;;
+        guix)    local cmd=(guix install "${pkgs[@]}") ;;   # per-user profile, no sudo
+        nix-profile|nix-env)
+            local plain=() want_py=0 x
+            for x in "${pkgs[@]}"; do [[ "$x" == "@python" ]] && want_py=1 || plain+=("$x"); done
+            local pyexpr='python3.withPackages (p: [ p.tkinter p.pillow ])'
+            # (two commands: an --expr install treats every other argument as an attribute of that expression)
+            if [[ "$mgr" == nix-profile ]]; then
+                local cmd=(nix profile install)
+                for x in "${plain[@]}"; do cmd+=("nixpkgs#$x"); done
+                ((want_py)) && NIX_PY_CMD=(nix profile install --impure --expr "with (builtins.getFlake \"nixpkgs\").legacyPackages.\${builtins.currentSystem}; $pyexpr")
+            else
+                local cmd=(nix-env -f "<nixpkgs>" -iA "${plain[@]}")   # <nixpkgs> works on NixOS (channel "nixos") too
+                ((want_py)) && NIX_PY_CMD=(nix-env -i -E "_: with import <nixpkgs> {}; $pyexpr")
+            fi
+            ((${#plain[@]})) || cmd=(true)
+            ((want_py)) && log "Nix: Python with Tk + Pillow goes in as one environment; if your profile already has a python3, nix may report a collision - remove that one first"
+            ;;
     esac
     [[ "$mgr" == dnf ]] && [[ " ${missing[*]} " == *" ffmpeg "* ]] && \
         warn "Fedora: recording needs ffmpeg with libx264 (RPM Fusion 'ffmpeg', not 'ffmpeg-free')"
     log "About to run: ${cmd[*]}"
+    ((${#NIX_PY_CMD[@]})) && log "      and then: ${NIX_PY_CMD[*]}"
     if ask "Install these packages now?" y; then
-        if run "${cmd[@]}"; then ((DRY)) && log "(dry-run: nothing installed)" || ok "dependencies installed"; else warn "package install failed or was cancelled - continuing"; fi
+        local rc=0
+        run "${cmd[@]}" || rc=1
+        if ((${#NIX_PY_CMD[@]})); then log "About to run: ${NIX_PY_CMD[*]}"; run "${NIX_PY_CMD[@]}" || rc=1; fi
+        if ((rc)); then warn "package install failed or was cancelled - continuing"
+        elif ((DRY)); then log "(dry-run: nothing installed)"
+        else ok "dependencies installed"; fi
+        # Nix/Guix: run (and pin) the profile's python, which is the one that has Tk + Pillow
+        if [[ "$mgr" == nix-* && $PY_PINNED -eq 0 ]] && ! ((DRY)); then
+            local np; np=$(nix_profile_python); [[ -n "$np" ]] && PY="$np" && PY_PINNED=1
+        fi
+        [[ "$mgr" == guix ]] && ! ((DRY)) && guix_env
     else
         warn "skipped package install - missing: ${missing[*]}"
     fi
@@ -367,8 +457,11 @@ write_if_changed() {   # write_if_changed PATH CONTENT MODE
 }
 
 write_launchers() {
-    write_if_changed "$WRAPPER" '#!/bin/bash
-exec python3 "$HOME/.local/bin/snippysnappy.d/snippysnappy.py" "$@"' 755
+    # /bin/sh, not /bin/bash: NixOS and Guix System only ship /bin/sh
+    local body='#!/bin/sh'
+    ((GUIX_ENV)) && body+=$'\n''[ -f "$HOME/.guix-profile/etc/profile" ] && GUIX_PROFILE="$HOME/.guix-profile" && . "$HOME/.guix-profile/etc/profile"'
+    body+=$'\n'"exec \"$PY\" \"\$HOME/.local/bin/snippysnappy.d/snippysnappy.py\" \"\$@\""
+    write_if_changed "$WRAPPER" "$body" 755
     if [[ -f "$INSTALL_DIR/snippysnappy-icon.png" ]] && ! ((DRY)); then
         mkdir -p "$(dirname "$ICON_FILE")" && cp -f "$INSTALL_DIR/snippysnappy-icon.png" "$ICON_FILE"
         command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q -t "${ICON_FILE%/256x256/*}" 2>/dev/null
@@ -411,7 +504,7 @@ xfce_shortcuts() {
 verify_install() {
     local want="$1" got
     ((DRY)) && return 0
-    got=$(python3 "$INSTALL_DIR/snippysnappy.py" --version 2>/dev/null | awk '{print $2}')
+    got=$("$PY" "$INSTALL_DIR/snippysnappy.py" --version 2>/dev/null | awk '{print $2}')
     [[ "$got" == "$want" ]]
 }
 
@@ -460,6 +553,7 @@ do_uninstall() {
 
 # ---------------------------------------------------------------- main
 CUR=$(installed_version)
+command -v guix >/dev/null && guix_env   # Guix: its python only sees python-pillow with the profile loaded
 
 case "$ACTION" in
     check)
@@ -516,9 +610,10 @@ if ((DEPS)); then
         install_deps
     fi
 fi
-python3 -c 'import sys; sys.exit(sys.version_info < (3, 9))' 2>/dev/null || die "Python 3.9 or newer is required ($(python3 --version 2>&1))."
-have_req tk || die "Python's tkinter is not available - install it (Gentoo: dev-lang/python with USE=tk) and re-run."
-have_req pillow || die "Pillow is not available for $(command -v python3) - install it and re-run."
+command -v "$PY" >/dev/null || die "no Python interpreter '$PY' - install Python 3.9+ (with Tk) or pass --python PATH."
+"$PY" -c 'import sys; sys.exit(sys.version_info < (3, 9))' 2>/dev/null || die "Python 3.9 or newer is required ($("$PY" --version 2>&1))."
+have_req tk || die "Python's tkinter is not available for $PY - install it (Gentoo: dev-lang/python with USE=tk; Nix/Guix: see above) and re-run."
+have_req pillow || die "Pillow is not available for $(command -v "$PY") - install it and re-run."
 
 if [[ -z "$SRC_DIR" ]]; then
     STAGE=$(mktemp -d "$INSTALL_DIR/.staging.XXXXXX") || die "mktemp failed"
@@ -545,7 +640,7 @@ fi
 if verify_install "$WANT"; then
     ok "snippysnappy --version reports $WANT"
 else
-    warn "the new version did not start cleanly ('python3 $INSTALL_DIR/snippysnappy.py --version')"
+    warn "the new version did not start cleanly ('$PY $INSTALL_DIR/snippysnappy.py --version')"
     if [[ -n "$CUR" ]] && ask "Roll back to $CUR?" y; then ASSUME_YES=1 do_rollback; exit 1; fi
 fi
 summary
