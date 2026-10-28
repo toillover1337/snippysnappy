@@ -1,4 +1,4 @@
-# snippysnappy v1.0.1
+# snippysnappy v1.0.3
 """Video controls for a pin made from a film: cropped playback, scrub bar, loop, restart, volume."""
 import json
 import os

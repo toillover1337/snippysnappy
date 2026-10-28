@@ -1,4 +1,4 @@
-# snippysnappy v1.0.1
+# snippysnappy v1.0.3
 """
 Lets this package run as `python3 -m snippysnappy [args...]`, and is also
 what the "launch a pin viewer" subprocess call in selector_app.py

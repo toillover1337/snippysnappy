@@ -1,4 +1,4 @@
-# snippysnappy v1.0.1
+# snippysnappy v1.0.3
 """Save-folder defaults, legacy-folder migration prompts and the sloppy-folder sweep.
 """
 import re

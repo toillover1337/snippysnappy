@@ -1,4 +1,4 @@
-# snippysnappy v1.0.1
+# snippysnappy v1.0.3
 """The floating Pin viewer window (run_pin_viewer) - a separate lightweight, borderless Tk window per pinned region, with hover-to-reveal controls, resize/lock/maximize/minimize, and cross-process discovery via the coordinator's pin registry."""
 import math
 import os
@@ -225,8 +225,84 @@ def run_pin_viewer(path, forced_pin_id=None, proportional=True):
     resize_btn = make_btn(control_bar_left, "Resize")
     pin_btn = make_btn(control_bar_right, "Pin")
 
+    # v1.0.3: Wayland compositors (wlroots family at least) ignore the X11 opacity hint that
+    # -alpha sets on XWayland windows, and a pin is an override-redirect window that their own
+    # opacity commands can't reach either. There the pin fakes it: it blends itself with a
+    # snapshot of what is behind it (re-taken, by briefly hiding the pin, whenever the pin
+    # stops at a new spot or size). PIN_WAYLAND_OPACITY: "auto" (simulate except on GNOME/KDE,
+    # whose compositors honour the hint) | "native" | "simulated".
+    from . import constants as _pc
+    _mode = str(getattr(_pc, "PIN_WAYLAND_OPACITY", "auto") or "auto").lower()
+    _desk = os.environ.get("XDG_CURRENT_DESKTOP", "").upper()
+    sim = {"on": BACKEND == "wayland" and (
+        _mode == "simulated" or (_mode == "auto" and "GNOME" not in _desk and "KDE" not in _desk)),
+        "bg": None, "rect": None, "last_rect": None, "held": False, "job": None, "busy": False}
+
+    def _sim_viewport_rect():
+        try:
+            return (label.winfo_rootx(), label.winfo_rooty(), label.winfo_width(), label.winfo_height())
+        except tk.TclError:
+            return None
+
+    def _sim_refresh_bg():
+        """Hide the pin, grab what is behind its image area, show it again and re-render."""
+        rect = _sim_viewport_rect()
+        if rect is None or rect[2] < 2 or rect[3] < 2 or sim["busy"]:
+            return
+        sim["busy"] = True
+        root.withdraw()
+
+        def _grab():
+            try:
+                from .capture import capture_monitor
+                fd, tmp_name = tempfile.mkstemp(suffix=".png")
+                os.close(fd)
+                try:
+                    capture_monitor(*rect, Path(tmp_name))
+                    with Image.open(tmp_name) as im:
+                        sim["bg"] = im.convert("RGB").resize((rect[2], rect[3])) if im.size != rect[2:] else im.convert("RGB")
+                    sim["rect"] = rect
+                finally:
+                    Path(tmp_name).unlink(missing_ok=True)
+            except Exception:
+                log.exception("Pin viewer: could not capture the background for simulated opacity")
+                sim["bg"] = None
+            finally:
+                root.deiconify()
+                sim["busy"] = False
+                render_at_current_scale()
+        root.after(150, _grab)   # give the compositor a frame or two to unmap the pin
+
+    def _sim_watch():
+        """While translucent: re-take the background once the pin has settled somewhere new."""
+        sim["job"] = None
+        if not sim["on"] or state["opacity"] >= 0.999:
+            return
+        rect = _sim_viewport_rect()
+        if rect and not sim["held"] and not sim["busy"] and rect != sim["rect"] and rect == sim["last_rect"]:
+            _sim_refresh_bg()
+        sim["last_rect"] = rect
+        sim["job"] = root.after(300, _sim_watch)
+
+    def _sim_blend(disp):
+        bg = sim["bg"]
+        if not sim["on"] or state["opacity"] >= 0.999 or bg is None:
+            return disp
+        if bg.size != disp.size:
+            # the label's border/padding: the image sits centred inside the captured viewport
+            dx, dy = (bg.width - disp.width) // 2, (bg.height - disp.height) // 2
+            if dx < 0 or dy < 0:
+                return disp   # stale background from a smaller size - a fresh one is on its way
+            bg = bg.crop((dx, dy, dx + disp.width, dy + disp.height))
+        return Image.blend(bg, disp.convert("RGB"), state["opacity"])
+
     def set_opacity(val):
         state["opacity"] = max(0.15, min(1.0, float(val) / 100.0))   # never fully 0 - an invisible pin with no way back is a trap
+        if sim["on"]:
+            render_at_current_scale()
+            if state["opacity"] < 0.999 and sim["job"] is None:
+                sim["job"] = root.after(300, _sim_watch)
+            return
         try:
             root.attributes("-alpha", state["opacity"])
         except Exception:
@@ -316,6 +392,7 @@ def run_pin_viewer(path, forced_pin_id=None, proportional=True):
         else:
             source_img = original
         disp = source_img.resize((vw, vh), Image.LANCZOS) if source_img.size != (vw, vh) else source_img
+        disp = _sim_blend(disp)
         photo_holder["photo"] = ImageTk.PhotoImage(disp)
         label.configure(image=photo_holder["photo"])
         label.configure(width=vw, height=vh)
@@ -1030,6 +1107,9 @@ def run_pin_viewer(path, forced_pin_id=None, proportional=True):
     control_bar_right.bind("<Leave>", schedule_hide_controls)
     label.bind("<ButtonPress-1>", on_drag_press)
     label.bind("<B1-Motion>", on_drag_motion)
+    if sim["on"]:   # simulated opacity must not hide the pin in the middle of a drag
+        root.bind_all("<ButtonPress-1>", lambda e: sim.__setitem__("held", True), add="+")
+        root.bind_all("<ButtonRelease-1>", lambda e: sim.__setitem__("held", False), add="+")
     label.bind("<ButtonPress-3>", toggle_locked)
     label.bind("<Button-4>", lambda e: on_scroll_zoom(1, e))
     label.bind("<Button-5>", lambda e: on_scroll_zoom(-1, e))

@@ -74,6 +74,8 @@ snippysnappy --version
 - On tiling compositors, snippysnappy windows float automatically (Sway/Hyprland). Turn this off with `WAYLAND_FLOAT_WINDOWS = False`.
 - On Sway, the Pins list's "View" button can only bring a window forward if you set `focus_on_window_activation focus`.
 - On GNOME/KDE, the desktop asks for permission the first time you take a screenshot or start a recording.
+- Dropdowns open when you release the mouse button and stay open until you pick an item. Some compositors would otherwise close them on release.
+- Most wlroots compositors ignore window transparency for XWayland windows. There, a pin's opacity slider blends the pin with a snapshot of what's behind it, retaken whenever the pin settles at a new position or size. Set `PIN_WAYLAND_OPACITY = "native"` if your compositor supports real transparency (GNOME and KDE use native by default).
 
 ## License
 

@@ -1,4 +1,4 @@
-# snippysnappy v1.0.1
+# snippysnappy v1.0.3
 """
 Save As dialog shared by image and film windows: a file-type dropdown, a
 folder box with fuzzy directory autocomplete (directories only, never

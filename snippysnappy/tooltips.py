@@ -1,4 +1,4 @@
-# snippysnappy v1.0.1
+# snippysnappy v1.0.3
 """
 Hover tips for toolbar buttons (and a few checkboxes). Looked up by the button's own label text:
     (kind, mode, label)  ->  (kind, label)  ->  label

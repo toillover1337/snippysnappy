@@ -1,4 +1,4 @@
-# snippysnappy v1.0.1
+# snippysnappy v1.0.3
 """Logging setup and subprocess-run helpers (logged wrappers around run()/Popen())."""
 import os
 import logging

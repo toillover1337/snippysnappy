@@ -1,4 +1,4 @@
-# snippysnappy v1.0.1
+# snippysnappy v1.0.3
 """Fuzzy file-open helpers: --nil arg parsing, junk-file scoring, and the fuzzy search used by --open prompt / the Tabs panel file picker."""
 from .constants import NIL_CANVAS_DEFAULT_WIDTH, NIL_CANVAS_DEFAULT_HEIGHT, NIL_CANVAS_DEFAULT_COLOR
 import os

@@ -1,4 +1,4 @@
-# snippysnappy v1.0.1
+# snippysnappy v1.0.3
 """
 The snippyfilm review/playback window (FilmApp) - a decorated window in
 the same visual style as SelectorApp's own decorated windows, for viewing

@@ -1,4 +1,4 @@
-# snippysnappy v1.0.1
+# snippysnappy v1.0.3
 """
 snippysnappy - a lightweight screenshot capture with adjustable selection,
 free-hand edit (pen/highlighter), magnifier, measurement tool, and OCR text

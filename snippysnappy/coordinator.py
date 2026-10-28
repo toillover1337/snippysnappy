@@ -1,4 +1,4 @@
-# snippysnappy v1.0.1
+# snippysnappy v1.0.3
 """Cross-process window/pin coordination: a same-user Unix-socket hub/client protocol that lets 'Merge in' and the Pins list reach windows opened by a SEPARATE snippysnappy invocation, plus the local (same-process) window/pin registries those two features also share."""
 import os
 import uuid

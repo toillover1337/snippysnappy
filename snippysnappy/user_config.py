@@ -1,4 +1,4 @@
-# snippysnappy v1.0.1
+# snippysnappy v1.0.3
 """
 The user's own, external config file - distinct from constants.py (which
 lives inside the installed package and gets overwritten by any update or
@@ -95,6 +95,7 @@ changed - everything below is commented out and has no effect as-is.
 # WAYLAND_CAPTURE_TOOL = "auto"   # "auto" | "grim" | "portal" | "spectacle" | "gnome-screenshot"
 # WAYLAND_RECORD_TOOL = "auto"    # "auto" | "wf-recorder" | "portal" (GNOME/KDE: portal + PipeWire, needs gst-launch-1.0 + pipewiresrc)
 # WAYLAND_FLOAT_WINDOWS = True    # sway/Hyprland: float snippysnappy windows instead of tiling them
+# PIN_WAYLAND_OPACITY = "auto"   # "auto" | "native" | "simulated" - how the pin opacity slider works on Wayland
 # PLUGINS_ENABLED = True         # False = never load plugin files (extra audio/video effects)
 # PLUGIN_DIR = None              # None = ~/.config/snippysnappy/plugins (created automatically)
 '''

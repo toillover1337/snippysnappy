@@ -1,4 +1,4 @@
-# snippysnappy v1.0.1
+# snippysnappy v1.0.3
 """
 Shared filesystem locations, derived from where this PACKAGE lives on disk.
 """

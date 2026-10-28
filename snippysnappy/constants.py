@@ -1,11 +1,11 @@
-# snippysnappy v1.0.1
+# snippysnappy v1.0.3
 """Configuration knobs: sizes, colors, defaults, file locations, feature toggles.
 """
 from pathlib import Path
 
 from ._paths import INSTALL_DIR
 
-SNIPPYSNAPPY_VERSION = "1.0.1"   # X.0.0 = "stable" release; 0.X.0 = feature addition/major tweak; 0.0.X = bug fix/small tweak. Reaching the digit "9" should increment to "10" e.g. x.x.9 -> x.x.10.
+SNIPPYSNAPPY_VERSION = "1.0.3"   # X.0.0 = "stable" release; 0.X.0 = feature addition/major tweak; 0.0.X = bug fix/small tweak. Reaching the digit "9" should increment to "10" e.g. x.x.9 -> x.x.10.
 
 LOG_PATH = INSTALL_DIR / "snippysnappy.log"   # Comment out this line to
                                               # disable file logging entirely.
@@ -30,6 +30,7 @@ CAPTURE_INCLUDE_CURSOR = True   # Paint the mouse cursor into in-process screens
 WAYLAND_CAPTURE_TOOL = "auto"   # Wayland screenshots: "auto" (grim, then portal, spectacle, gnome-screenshot) | "grim" | "portal" | "spectacle" | "gnome-screenshot"
 WAYLAND_RECORD_TOOL = "auto"    # Wayland recording: "auto" (wf-recorder, then portal+PipeWire via gst-launch-1.0) | "wf-recorder" | "portal"
 WAYLAND_FLOAT_WINDOWS = True    # sway/Hyprland: add a runtime rule so snippysnappy windows float instead of being tiled
+PIN_WAYLAND_OPACITY = "auto"   # Pin opacity slider on Wayland: "auto" (simulated, except GNOME/KDE) | "native" | "simulated" (blends with a snapshot of what is behind the pin)
 PLUGINS_ENABLED = True      # False = never load plugin files (effects plugins).
 PLUGIN_DIR = None           # None -> ~/.config/snippysnappy/plugins (created if missing); every *.py in it is loaded.
 

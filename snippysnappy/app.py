@@ -1,4 +1,4 @@
-# snippysnappy v1.0.1
+# snippysnappy v1.0.3
 """Entry point: CLI argument parsing and the top-level dispatch (select/fullscreen/window/open/nil/pin-view modes)."""
 import argparse
 import os
@@ -197,9 +197,10 @@ class _HelpFormatter(argparse.RawDescriptionHelpFormatter):  # _p19_help_formatt
 
 def main():
     if not any(a in ("-h", "--help", "--version", "-V") for a in sys.argv[1:]):
-        from .capture import check_x_display, install_wayland_window_rules   # patch 45/46
+        from .capture import check_x_display, install_wayland_window_rules, install_wayland_menu_behavior
         check_x_display()
         install_wayland_window_rules()
+        install_wayland_menu_behavior()
     try:
         from . import constants as _tc
         from .tempdir_setup import install_temp_dir

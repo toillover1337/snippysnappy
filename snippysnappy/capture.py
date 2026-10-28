@@ -1,4 +1,4 @@
-# snippysnappy v1.0.1
+# snippysnappy v1.0.3
 """Screen/monitor/window capture backends (X11 and Wayland), monitor geometry helpers, and the --delay countdown."""
 from pathlib import Path
 from .constants import DEFAULT_MONITOR_NAME
@@ -635,6 +635,43 @@ def _fit_to_logical(path):
         log.info(f"Wayland capture is {img.size}, desktop is {vw}x{vh} logical - scaling to match")
         img.load()
         img.resize((vw, vh), Image.LANCZOS).save(path, compress_level=1)
+
+
+def install_wayland_menu_behavior():
+    """
+    v1.0.3 (Wayland): dropdowns (tk.OptionMenu) open on button RELEASE and stay open until an
+    item is clicked. Tk normally posts on press and keeps the menu up only if the release still
+    lands on the button; some compositors (seen on a wlroots/dwl-family one) move pointer or
+    keyboard focus to the newly mapped menu, so the release closed it straight away. Posting on
+    release takes that release out of the picture. X11 is unchanged.
+    """
+    if BACKEND != "wayland":
+        return
+    import tkinter as tk
+    if getattr(tk.OptionMenu, "_wl_release_post", False):
+        return
+    prev_init = tk.OptionMenu.__init__
+
+    def _post(mb):
+        try:
+            if str(mb.cget("state")) == "disabled":
+                return "break"
+            m = mb.nametowidget(mb.cget("menu"))
+            if m.winfo_ismapped():
+                mb.tk.call("tk::MenuUnpost", str(m))
+            else:
+                mb.tk.call("tk::MbPost", str(mb))
+        except (tk.TclError, KeyError):
+            pass
+        return "break"
+
+    def init(self, *args, **kwargs):
+        prev_init(self, *args, **kwargs)
+        self.bind("<ButtonPress-1>", lambda e: "break", add="+")
+        self.bind("<ButtonRelease-1>", lambda e, w=self: _post(w), add="+")
+
+    tk.OptionMenu.__init__ = init
+    tk.OptionMenu._wl_release_post = True
 
 
 def install_wayland_window_rules():

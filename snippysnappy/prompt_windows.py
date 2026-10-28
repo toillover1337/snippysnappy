@@ -1,4 +1,4 @@
-# snippysnappy v1.0.1
+# snippysnappy v1.0.3
 """Standalone Tk prompt windows: --open prompt (fuzzy CLI-style and GUI file pickers) and the --delay countdown window."""
 import tkinter as tk
 from pathlib import Path
