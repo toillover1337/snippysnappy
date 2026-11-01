@@ -1,11 +1,11 @@
-# snippysnappy v1.0.3
+# snippysnappy v1.0.4
 """Configuration knobs: sizes, colors, defaults, file locations, feature toggles.
 """
 from pathlib import Path
 
 from ._paths import INSTALL_DIR
 
-SNIPPYSNAPPY_VERSION = "1.0.3"   # X.0.0 = "stable" release; 0.X.0 = feature addition/major tweak; 0.0.X = bug fix/small tweak. Reaching the digit "9" should increment to "10" e.g. x.x.9 -> x.x.10.
+SNIPPYSNAPPY_VERSION = "1.0.4"   # X.0.0 = "stable" release; 0.X.0 = feature addition/major tweak; 0.0.X = bug fix/small tweak. Reaching the digit "9" should increment to "10" e.g. x.x.9 -> x.x.10.
 
 LOG_PATH = INSTALL_DIR / "snippysnappy.log"   # Comment out this line to
                                               # disable file logging entirely.
@@ -340,6 +340,12 @@ RECORD_AUDIO = "off"          # "off" | "desktop" | "mic" | "both" -
                               # prompt to change it for one recording.
 AUDIO_DESKTOP_DEVICE = None   # None = sys default output's monitor.
 AUDIO_MIC_DEVICE = None       # None = sys default input.
+AUDIO_METER_DEFAULT = "all"   # record box level meter: "all" (loudest input) |
+                              # "mic" | "desktop" (click the icon to cycle).
+AUDIO_METER_RED_DB = -10      # the bar is full and red at this peak level (dBFS; 0 = clipping,
+                              # more negative = quieter).
+AUDIO_METER_FLOOR_DB = -40    # the bar is empty at this level (not below -50).
+AUDIO_METER_DEBUG = False     # True: show the live peak / red point (dBFS) under the meter icon.
 
 FILM_DEFAULT_VOLUME = 100   # starting playback volume (0-100).
 

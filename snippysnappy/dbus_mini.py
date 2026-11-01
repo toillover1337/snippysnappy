@@ -1,4 +1,4 @@
-# snippysnappy v1.0.3
+# snippysnappy v1.0.4
 """
 Minimal D-Bus client (standard library only) - just enough for the xdg-desktop-portal
 Screenshot and ScreenCast interfaces on Wayland desktops without wlroots tools (GNOME, KDE).

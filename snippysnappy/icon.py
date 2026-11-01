@@ -1,4 +1,4 @@
-# snippysnappy v1.0.3
+# snippysnappy v1.0.4
 """Optional titlebar/taskbar app icon loading (inert until a PNG is dropped in - see comment below)."""
 import tkinter as tk
 

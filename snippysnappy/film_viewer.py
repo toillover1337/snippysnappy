@@ -1,4 +1,4 @@
-# snippysnappy v1.0.3
+# snippysnappy v1.0.4
 """
 The snippyfilm review/playback window (FilmApp) - a decorated window in
 the same visual style as SelectorApp's own decorated windows, for viewing
@@ -1087,6 +1087,7 @@ class FilmApp:
             return self._fs_do_copy()
         self._pause()
         notify("Rendering edits\u2026", "Baking your edits into the film", blocking=False)
+        self._busy_begin("Rendering your edits", "Encoding the video - this can take a while")
         dest = Path(_ed4_tempfile.mkdtemp(prefix="snippysnappy-bake-"))
 
         def worker():
@@ -1190,6 +1191,9 @@ class FilmApp:
 
     def _close_keep(self):
         """Closes this window WITHOUT deleting the film (it stays where it auto-saved). Used by the Windows-panel x and remote close requests; Cancel is the only thing that discards."""
+        if getattr(self, "_busy", False):
+            notify("Still saving", "Wait for the save to finish before closing", blocking=False)
+            return
         log.info("Film viewer: closing window, keeping the film file")
         self._cleanup_and_close()
 
@@ -1484,6 +1488,48 @@ class FilmApp:
         self._pause()
         self._fs_export(_fs_paths.get_dir("sloppyfilms") / f"sloppyfilm-{_fs_stamp()}.mkv", "mkv", sloppy=True)
 
+    # ---- visible "working" overlay for slow saves (render / merge / convert) ----
+    def _busy_begin(self, title, detail=""):
+        """Covers the window with a message so the user can see the save is still running. Safe to call again to change the text."""
+        try:
+            self._busy = True
+            ov = getattr(self, "_busy_frame", None)
+            if ov is None or not ov.winfo_exists():
+                ov = tk.Frame(self.root, bg="#111111", highlightbackground="#ff9900", highlightthickness=2)
+                self._busy_title = tk.Label(ov, fg="white", bg="#111111", font=("", 14, "bold"))
+                self._busy_title.pack(padx=30, pady=(18, 4))
+                self._busy_detail = tk.Label(ov, fg="#dddddd", bg="#111111", font=("", 10), justify="center")
+                self._busy_detail.pack(padx=30, pady=(0, 6))
+                tk.Label(ov, text="Please do not close snippysnappy until this finishes.",
+                         fg="#ffcc66", bg="#111111", font=("", 10)).pack(padx=30, pady=(0, 18))
+                self._busy_frame = ov
+            self._busy_base = title
+            self._busy_dots = 0
+            self._busy_detail.configure(text=detail)
+            self._busy_title.configure(text=title)
+            ov.place(relx=0.5, rely=0.5, anchor="center")
+            ov.lift()
+            self._busy_tick()
+        except Exception:
+            log.exception("Film viewer: could not show the busy overlay (non-fatal)")
+
+    def _busy_tick(self):
+        if not getattr(self, "_busy", False):
+            return
+        try:
+            self._busy_dots = (self._busy_dots + 1) % 4
+            self._busy_title.configure(text=self._busy_base + "." * self._busy_dots)
+            self.root.after(400, self._busy_tick)
+        except Exception:
+            pass
+
+    def _busy_end(self):
+        self._busy = False
+        try:
+            self._busy_frame.place_forget()
+        except Exception:
+            pass
+
     def _fs_export_2(self, out_path, ext, sloppy=False):
         src = self.video_path
         try:
@@ -1496,8 +1542,10 @@ class FilmApp:
         also_copy = bool(self._also_copy_var.get())
         also_exit = bool(self._also_exit_var.get())
         notify("Saving\u2026", f"Writing {out_path.name}", blocking=False)
+        self._busy_begin("Saving", f"Writing {out_path.name}\n(long recordings can take a while to process)")
 
         def finished(ok):
+            self._busy_end()
             if not ok:
                 notify("Save failed", "Could not write the file - see the log", blocking=False)
                 return
@@ -4152,6 +4200,7 @@ class FilmApp:
 
             def after():
                 if baked is None:
+                    self._busy_end()
                     notify("Save failed", "Could not render the edits - see the log", blocking=False)
                     return
                 orig_path = self.video_path

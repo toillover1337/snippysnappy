@@ -1,4 +1,4 @@
-# snippysnappy v1.0.3
+# snippysnappy v1.0.4
 """
 The user's own, external config file - distinct from constants.py (which
 lives inside the installed package and gets overwritten by any update or

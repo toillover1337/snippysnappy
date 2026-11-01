@@ -1,4 +1,4 @@
-# snippysnappy v1.0.3
+# snippysnappy v1.0.4
 """Entry point: CLI argument parsing and the top-level dispatch (select/fullscreen/window/open/nil/pin-view modes)."""
 import argparse
 import os

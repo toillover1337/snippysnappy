@@ -1,4 +1,4 @@
-# snippysnappy v1.0.3
+# snippysnappy v1.0.4
 """
 Screen recording: the ffmpeg x11grab backend, a minimal standalone
 region-picker for plain select mode (deliberately NOT reusing
@@ -18,7 +18,7 @@ import tkinter as tk
 from pathlib import Path
 
 from .logging_setup import log
-from .capture import BACKEND, capture_full_screen, get_virtual_screen_bounds, get_monitors, WindowSelectCancelled
+from .capture import BACKEND, wait_written, capture_full_screen, get_virtual_screen_bounds, get_monitors, WindowSelectCancelled
 from .constants import FILM_REVIEW_MONITOR
 from .notify_toast import notify
 from .coordinator import (
@@ -99,15 +99,18 @@ def pick_region_interactive_x11():
     os.close(fd)
     tmp_path = Path(tmp_name)
     capture_full_screen(tmp_path)
+    wait_written(tmp_path)   # the PNG is written on a background thread; Image.open needs the finished file
 
     result = {"rect": None, "cancelled": False}
     root = tk.Tk(className="snippysnappy-record-select")
+    root.withdraw()                      # stay unmapped until the backdrop is drawn - no white flash
+    root.configure(bg="black")
     root.overrideredirect(True)
     root.attributes("-topmost", True)
     root.geometry(f"{vw}x{vh}+{vx}+{vy}")
-    img = Image.open(tmp_path)
+    img = Image.open(tmp_path).convert("RGB")   # RGB, not RGBA: Tk alpha-blends an RGBA photo in software on every redraw (slow drag)
     photo = ImageTk.PhotoImage(img)
-    canvas = tk.Canvas(root, width=vw, height=vh, highlightthickness=0, cursor="crosshair")
+    canvas = tk.Canvas(root, width=vw, height=vh, highlightthickness=0, bg="black", cursor="crosshair")
     canvas.pack(fill="both", expand=True)
     canvas.create_image(0, 0, anchor="nw", image=photo)
 
@@ -140,6 +143,16 @@ def pick_region_interactive_x11():
     canvas.bind("<ButtonRelease-1>", on_release)
     root.bind("<Escape>", on_escape)
     root.update_idletasks()
+    try:
+        root.attributes("-alpha", 0.0)   # with a compositor: map invisibly, show once painted (ignored without one)
+    except tk.TclError:
+        pass
+    root.deiconify()                     # map it now: the canvas already holds the screenshot
+    root.update()                        # paint the first frame before we grab/focus
+    try:
+        root.attributes("-alpha", 1.0)
+    except tk.TclError:
+        pass
     root.focus_force()
     try:
         root.grab_set_global()
@@ -194,6 +207,7 @@ class Recorder:
             x, y, w, h = self._geom
             _rec_kill(self.vproc)
             self.proc, self.vproc = _rec_start(x, y, w, h, self.output_path, [])
+            self._audio_inputs = []   # the level meter hides itself
             log.info(f"Recorder: ffmpeg restarted video-only (pid={self.proc.pid})")
             return False
         if time.monotonic() >= self._audio_deadline:
@@ -240,6 +254,100 @@ class Recorder:
                         f"*.log next to {self.output_path}")
             _rec_kill(self.proc)
         return self.proc.poll() is None
+
+
+def _meter_range():
+    """(red_db, floor_db) in dBFS from config: the bar is empty at AUDIO_METER_FLOOR_DB and full (red) at AUDIO_METER_RED_DB."""
+    from . import constants as _c
+    try:
+        red = float(getattr(_c, "AUDIO_METER_RED_DB", -10))
+        floor = float(getattr(_c, "AUDIO_METER_FLOOR_DB", -40))
+    except (TypeError, ValueError):
+        red, floor = -10.0, -40.0
+    red = min(0.0, red)
+    if floor > red - 5:
+        floor = red - 5
+    return red, max(-50.0, floor)
+
+
+def _meter_debug():
+    from . import constants as _c
+    return bool(getattr(_c, "AUDIO_METER_DEBUG", False))
+
+
+def _meter_default_focus(labels):
+    """AUDIO_METER_DEFAULT -> None (all) or one of the labels present ("mic" / "desktop")."""
+    from . import constants as _c
+    v = str(getattr(_c, "AUDIO_METER_DEFAULT", "all") or "all").strip().lower()
+    v = {"m": "mic", "d": "desktop"}.get(v, v)
+    return v if v in labels else None
+
+
+class _LevelMeter:
+    """
+    Live input level for the record control box. One small ffmpeg per audio input reads the same
+    PulseAudio/PipeWire source as the recording (16 kHz mono, raw) and a thread keeps the loudest
+    recent peak in self.level (0..1, from -50 dBFS to 0 dBFS). Pure display - it never touches the recording.
+    """
+    def __init__(self, inputs):
+        """inputs: [(label, device), ...]"""
+        import math
+        import threading
+        self._math = math
+        self.level = 0.0
+        self.labels = [lab for lab, _dev in inputs]
+        self.focus = None            # None = loudest of all inputs, else one label ("mic" / "desktop")
+        self._procs = []
+        self._stopped = False
+        self._levels = {}
+        for i, (_lab, dev) in enumerate(inputs):
+            try:
+                pr = subprocess.Popen(
+                    ["ffmpeg", "-v", "quiet", "-nostdin", "-f", "pulse", "-i", dev,
+                     "-ac", "1", "-ar", "16000", "-f", "s16le", "pipe:1"],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            except Exception:
+                log.exception(f"Recorder: level meter could not start for {dev} (non-fatal)")
+                continue
+            self._procs.append(pr)
+            threading.Thread(target=self._read, args=(i, pr), name="level-meter", daemon=True).start()
+
+    def _read(self, idx, pr):
+        from array import array
+        log10 = self._math.log10
+        try:
+            while not self._stopped:
+                buf = pr.stdout.read(1600)         # 800 samples = 50 ms
+                if not buf or self._stopped:
+                    break
+                a = array("h")
+                a.frombytes(buf[: len(buf) // 2 * 2])
+                peak = max(max(a), -min(a)) / 32768.0 if a else 0.0
+                db = 20.0 * log10(max(peak, 1e-5))
+                self._levels[idx] = min(1.0, max(0.0, (db + 50.0) / 50.0))
+                self.level = self.current()
+        except Exception:
+            pass
+        self._levels[idx] = 0.0
+        self.level = self.current()
+
+    def current(self):
+        """The level of the focused input (or the loudest one)."""
+        vals = [v for i, v in self._levels.items() if self.focus is None or self.labels[i] == self.focus]
+        return max(vals) if vals else 0.0
+
+    def set_focus(self, focus):
+        self.focus = focus
+        self.level = self.current()
+
+    def stop(self):
+        self._stopped = True
+        for pr in self._procs:
+            try:
+                pr.kill()
+            except Exception:
+                pass
+        self.level = 0.0
 
 
 def run_recording_session(x, y, w, h, monitor_bounds=None):
@@ -337,6 +445,19 @@ def run_recording_session(x, y, w, h, monitor_bounds=None):
         # (it's a root.after() callback) the instant ffmpeg actually exits,
         # which can race ahead of the rest of this function. The flag must
         stop_state["intentional"] = True
+        if meter is not None:
+            log.warning(f"Recorder: loudest meter level this recording {meter_state.get('peak', 0.0) * 50 - 50:.1f} dBFS (red above {red_db:.1f})")
+            meter.stop()
+        try:
+            # recorder.stop() can block for several seconds while ffmpeg finalises the file
+            for _w in frame.winfo_children():
+                _w.pack_forget()
+            tk.Label(frame, text="Finishing recording - please wait\u2026", fg="white", bg="#111111",
+                     font=("", 11, "bold")).pack(padx=12, pady=8)
+            _place_window()      # the box was sized for the timer - grow it to fit this message
+            root.update()
+        except Exception:
+            log.exception("Recorder: could not show the finishing message (non-fatal)")
         recorder.stop()
         try:
             _unregister_recorder(handle)
@@ -354,6 +475,63 @@ def run_recording_session(x, y, w, h, monitor_bounds=None):
     frame = tk.Frame(root, bg="#111111", highlightbackground="#ff4444", highlightthickness=1)
     frame.pack(fill="both", expand=True, padx=1, pady=1)
     tk.Label(frame, text="\u25cf", fg="#ff4444", bg="#111111", font=("", 11)).pack(side="left", padx=(8, 2), pady=6)
+    meter = None
+    meter_canvas = None
+    meter_state = {"shown": 0.0}
+    if recorder._audio_inputs:
+        try:
+            meter = _LevelMeter(list(recorder._audio_inputs))
+            meter.set_focus(_meter_default_focus(meter.labels))
+            red_db, floor_db = _meter_range()
+            meter_canvas = tk.Canvas(frame, width=(100 if _meter_debug() else 24), height=24, bg="#111111", highlightthickness=0)
+            meter_canvas.pack(side="left", padx=(0, 4), pady=4)
+            choices = [None] + list(dict.fromkeys(meter.labels)) if len(set(meter.labels)) > 1 else [None]
+
+            def _cycle_focus(_e=None):
+                if len(choices) < 2:
+                    return
+                meter.set_focus(choices[(choices.index(meter.focus) + 1) % len(choices)])
+                meter_state["shown"] = 0.0
+
+            meter_canvas.bind("<Button-1>", _cycle_focus)   # click: all -> mic -> desktop -> all
+        except Exception:
+            log.exception("Recorder: level meter failed to set up (non-fatal)")
+            meter = meter_canvas = None
+
+    def _meter_draw():
+        if meter is None or meter_canvas is None or stop_state["intentional"]:
+            return
+        try:
+            if not recorder._audio_inputs:           # audio fell back to video-only
+                meter.stop()
+                meter_canvas.pack_forget()
+                return
+            shown = max(meter.level, meter_state["shown"] * 0.8)   # quick rise, smooth fall
+            meter_state["shown"] = shown
+            meter_state["peak"] = max(meter_state.get("peak", 0.0), meter.level)
+            c = meter_canvas
+            c.delete("all")
+            db = shown * 50.0 - 50.0
+            frac = min(1.0, max(0.0, (db - floor_db) / (red_db - floor_db)))   # floor_db = empty, red_db = full
+            px = int(round(9 * frac))                                          # bar height in pixels (0..9)
+            full = px >= 9                                                     # bar at the very top <=> too loud
+            c.create_rectangle(5, 4, 11, 13, outline="", fill="#333333")      # empty well
+            if px > 0:
+                c.create_rectangle(5, 13 - px, 11, 13, outline="", fill="#ff4444" if full else "#ffffff")
+            ol = "#ffffff" if px > 0 else "#777777"                            # outline stays white; only the bar goes red
+            c.create_polygon(4, 3, 12, 3, 12, 14, 8, 16, 4, 14, outline=ol, fill="", width=1)
+            c.create_arc(2, 6, 14, 18, start=180, extent=180, style="arc", outline=ol)   # holder
+            c.create_line(8, 18, 8, 21, fill=ol)
+            c.create_line(4, 21, 12, 21, fill=ol)
+            if _meter_debug():                                                            # AUDIO_METER_DEBUG = True
+                c.create_text(30, 12, anchor="w", text=f"{db:.0f} / {red_db:.0f}{' RED' if full else ''}",
+                              fill="#00ccff", font=("", 8))
+            if meter.focus is not None:                                                   # which input is shown
+                c.create_text(19, 8, text=meter.focus[:1].upper(), fill="#ff4444", font=("", 8, "bold"))
+            root.after(60, _meter_draw)
+        except tk.TclError:
+            pass
+
     timer_label = tk.Label(frame, text="00:00", fg="white", bg="#111111", font=("", 11, "bold"))
     timer_label.pack(side="left", padx=(0, 8))
     tk.Button(frame, text="Stop", command=do_stop).pack(side="left", padx=(0, 8), pady=4)
@@ -363,6 +541,8 @@ def run_recording_session(x, y, w, h, monitor_bounds=None):
             return
         recorder.audio_fallback_poll()   # never mistake the audio fallback restart for an unexpected end
         if not recorder.is_running():
+            if meter is not None:
+                meter.stop()
             log.warning("Recorder: ffmpeg process ended unexpectedly - closing the control window")
             try:
                 _unregister_recorder(handle)
@@ -374,10 +554,16 @@ def run_recording_session(x, y, w, h, monitor_bounds=None):
         timer_label.configure(text=f"{elapsed // 60:02d}:{elapsed % 60:02d}")
         root.after(500, _tick)
 
-    root.update_idletasks()
-    w_req, h_req = root.winfo_reqwidth(), root.winfo_reqheight()
-    screen_w = root.winfo_screenwidth()
-    root.geometry(f"{w_req}x{h_req}+{screen_w - w_req - 20}+20")
+    def _place_window():
+        """Size the box to its content and keep it in the top-right corner."""
+        root.update_idletasks()
+        w_req, h_req = root.winfo_reqwidth(), root.winfo_reqheight()
+        screen_w = root.winfo_screenwidth()
+        root.geometry(f"{w_req}x{h_req}+{max(0, screen_w - w_req - 20)}+20")
+
+    _place_window()
+    if meter is not None:
+        _meter_draw()
 
     root.protocol("WM_DELETE_WINDOW", do_stop)
     root.after(500, _tick)

@@ -1,4 +1,4 @@
-# snippysnappy v1.0.3
+# snippysnappy v1.0.4
 """Screen/monitor/window capture backends (X11 and Wayland), monitor geometry helpers, and the --delay countdown."""
 from pathlib import Path
 from .constants import DEFAULT_MONITOR_NAME

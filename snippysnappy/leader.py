@@ -1,4 +1,4 @@
-# snippysnappy v1.0.3
+# snippysnappy v1.0.4
 r"""
 Leader-key menus (which-key style): press the leader key, then a short key sequence jumps to a toolbar or tool.
 

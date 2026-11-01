@@ -1,4 +1,4 @@
-# snippysnappy v1.0.3
+# snippysnappy v1.0.4
 r"""
 Film/audio effect registry and plugin loader.
 

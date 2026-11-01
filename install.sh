@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# snippysnappy installer / updater v1.0.3
+# snippysnappy installer / updater v1.0.4
 #
 # Installs snippysnappy from GitHub (a tagged release, the latest by default), keeps it
 # updated, rolls back, or uninstalls. Run it as YOUR user - it only uses sudo for the
@@ -26,7 +26,7 @@
 
 set -uo pipefail
 
-INSTALLER_VERSION="1.0.3"
+INSTALLER_VERSION="1.0.4"
 REPO_URL="${SNIPPYSNAPPY_REPO:-https://github.com/toillover1337/snippysnappy}"
 INSTALL_DIR="${SNIPPYSNAPPY_DIR:-$HOME/.local/bin/snippysnappy.d}"
 WRAPPER="$HOME/.local/bin/snippysnappy"
