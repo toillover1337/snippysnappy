@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# snippysnappy v1.0.4
+# snippysnappy v1.0.5
 """
 Thin launcher - NOT part of the snippysnappy package itself. This is what
 you install at ~/.local/bin/snippysnappy.d/snippysnappy.py (same filename

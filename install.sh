@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# snippysnappy installer / updater v1.0.4
+# snippysnappy installer / updater v1.0.5
 #
 # Installs snippysnappy from GitHub (a tagged release, the latest by default), keeps it
 # updated, rolls back, or uninstalls. Run it as YOUR user - it only uses sudo for the
@@ -15,6 +15,8 @@
 #   options: --yes (assume yes)  --no-deps  --deps-only  --session x11|wayland|both
 #            --python PATH (interpreter the wrapper runs; default: python3, or the Nix/Guix profile's)
 #            --shortcuts (XFCE keyboard shortcuts)  --dry-run (show what would happen)
+#            --open-with ("Open With" entries for images and videos in your file manager;
+#                         works in any file manager that follows the desktop-entry standard)
 #
 # Layout (unchanged from earlier versions):
 #   ~/.local/bin/snippysnappy                 wrapper on PATH
@@ -26,11 +28,13 @@
 
 set -uo pipefail
 
-INSTALLER_VERSION="1.0.4"
+INSTALLER_VERSION="1.0.5"
 REPO_URL="${SNIPPYSNAPPY_REPO:-https://github.com/toillover1337/snippysnappy}"
 INSTALL_DIR="${SNIPPYSNAPPY_DIR:-$HOME/.local/bin/snippysnappy.d}"
 WRAPPER="$HOME/.local/bin/snippysnappy"
 DESKTOP_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/applications/snippysnappy.desktop"
+OPEN_IMG_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/applications/snippysnappy-open-image.desktop"
+OPEN_FILM_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/applications/snippysnappy-open-recording.desktop"
 ICON_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/256x256/apps/snippysnappy.png"
 BACKUP_DIR="$INSTALL_DIR/backups"
 KEEP_BACKUPS=3
@@ -45,6 +49,7 @@ DEPS=1
 DEPS_ONLY=0
 SESSION=""
 SHORTCUTS=0
+OPENWITH=0
 DRY=0
 STEPS=()
 
@@ -120,7 +125,7 @@ run() { # run a command, or just print it with --dry-run
 }
 
 usage() {
-    sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
 }
 
@@ -152,6 +157,7 @@ while (($#)); do
         shift
         ;;
     --shortcuts) SHORTCUTS=1 ;;
+    --open-with) OPENWITH=1 ;;
     --dry-run) DRY=1 ;;
     --python)
         PY_ARG="${2:?--python needs a path}"
@@ -666,6 +672,34 @@ StartupWMClass=Snippysnappy" 644
     case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) warn "~/.local/bin is not on your PATH - add it in your shell profile to run 'snippysnappy' by name" ;; esac
 }
 
+# "Open With" entries: standard desktop entries that list snippysnappy for image and video files in the
+# right-click "Open With" menu of Thunar, Nautilus, Dolphin, PCManFM, Nemo, Caja ... They are hidden from
+# the application menu (NoDisplay) and do NOT become the default program for any file type.
+open_with_entries() {
+    write_if_changed "$OPEN_IMG_FILE" "[Desktop Entry]
+Type=Application
+Name=snippysnappy (edit image)
+Comment=Open the image in snippysnappy to annotate or edit it
+Exec=$WRAPPER --open %f
+Icon=snippysnappy
+Terminal=false
+NoDisplay=true
+Categories=Graphics;
+MimeType=image/png;image/jpeg;image/webp;image/bmp;image/tiff;image/gif;" 644
+    write_if_changed "$OPEN_FILM_FILE" "[Desktop Entry]
+Type=Application
+Name=snippysnappy (open recording)
+Comment=Open the video in the snippysnappy film window
+Exec=$WRAPPER --open-recording %f
+Icon=snippysnappy
+Terminal=false
+NoDisplay=true
+Categories=AudioVideo;Video;
+MimeType=video/x-matroska;video/mp4;video/webm;video/quicktime;video/x-msvideo;" 644
+    command -v update-desktop-database >/dev/null && run update-desktop-database "${DESKTOP_FILE%/*}" 2>/dev/null
+    log "right-click a picture or video > Open With > snippysnappy (some file managers need a restart, e.g. thunar -q)"
+}
+
 xfce_shortcuts() {
     command -v xfconf-query >/dev/null || {
         warn "xfconf-query not found - keyboard shortcuts not set (not XFCE?)"
@@ -729,7 +763,7 @@ do_uninstall() {
     ((ASSUME_YES)) || ask "Uninstall snippysnappy?" n || exit 0
     local f
     for f in "${PROGRAM_FILES[@]}"; do [[ -e "$INSTALL_DIR/$f" ]] && run rm -rf -- "$INSTALL_DIR/$f"; done
-    for f in "$WRAPPER" "$DESKTOP_FILE" "$ICON_FILE"; do [[ -e "$f" ]] && run rm -f -- "$f"; done
+    for f in "$WRAPPER" "$DESKTOP_FILE" "$ICON_FILE" "$OPEN_IMG_FILE" "$OPEN_FILM_FILE"; do [[ -e "$f" ]] && run rm -f -- "$f"; done
     ok "program removed"
     [[ -d "$BACKUP_DIR" ]] && ask "Also delete backups of older versions?" n && run rm -rf -- "$BACKUP_DIR" && ok "backups removed"
     [[ -d "$HOME/.config/snippysnappy" ]] && ask "Also delete your settings (~/.config/snippysnappy)?" n &&
@@ -853,6 +887,12 @@ if ! place_files "$SRC_DIR"; then
 fi
 ok "installed program files ($WANT)"
 write_launchers
+
+# keep existing "Open With" entries pointing at the right wrapper; offer them on a fresh interactive install
+if ((OPENWITH)) || [[ -e "$OPEN_IMG_FILE" || -e "$OPEN_FILM_FILE" ]] ||
+    { [[ -z "$CUR" ]] && [[ -t 0 ]] && ask "Add 'Open With snippysnappy' entries for images and videos to your file manager's right-click menu?" n; }; then
+    open_with_entries
+fi
 
 if ((SHORTCUTS)) || { [[ -z "$CUR" ]] && [[ "${XDG_CURRENT_DESKTOP:-}" == *XFCE* ]] && ask "Set up XFCE keyboard shortcuts (Print and friends)?" y; }; then
     xfce_shortcuts

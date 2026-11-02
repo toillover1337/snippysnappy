@@ -1,4 +1,4 @@
-# snippysnappy v1.0.4
+# snippysnappy v1.0.5
 """Logging setup and subprocess-run helpers (logged wrappers around run()/Popen())."""
 import os
 import logging
@@ -78,7 +78,9 @@ def setup_logging():
     logger = logging.getLogger("snippysnappy")
     if logger.handlers:
         return logger
-    logger.setLevel(logging.WARNING)   # bootstrap level; set_log_level() applies the configured LOG_LEVEL
+    # bootstrap level; set_log_level() applies the configured LOG_LEVEL. SNIPPYSNAPPY_DEBUG=1 (set by --debug,
+    # inherited by every process it starts) forces DEBUG for this run only.
+    logger.setLevel(logging.DEBUG if os.environ.get("SNIPPYSNAPPY_DEBUG") else logging.WARNING)
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 
     console = logging.StreamHandler(sys.stdout)
@@ -129,6 +131,9 @@ def set_log_level(level):  # _p18_log_level
     """Accepts "DEBUG"/"INFO"/"WARNING"/"ERROR"/"CRITICAL" (any case) or a logging int. Invalid -> WARNING."""
     valid = {"DEBUG": logging.DEBUG, "INFO": logging.INFO, "WARNING": logging.WARNING,
              "WARN": logging.WARNING, "ERROR": logging.ERROR, "CRITICAL": logging.CRITICAL}
+    if os.environ.get("SNIPPYSNAPPY_DEBUG"):   # --debug wins over config.py's LOG_LEVEL, for this run only
+        log.setLevel(logging.DEBUG)
+        return
     if isinstance(level, str):
         num = valid.get(level.strip().upper())
     else:

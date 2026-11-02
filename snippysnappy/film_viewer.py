@@ -1,4 +1,4 @@
-# snippysnappy v1.0.4
+# snippysnappy v1.0.5
 """
 The snippyfilm review/playback window (FilmApp) - a decorated window in
 the same visual style as SelectorApp's own decorated windows, for viewing
@@ -1495,13 +1495,13 @@ class FilmApp:
             self._busy = True
             ov = getattr(self, "_busy_frame", None)
             if ov is None or not ov.winfo_exists():
-                ov = tk.Frame(self.root, bg="#111111", highlightbackground="#ff9900", highlightthickness=2)
+                ov = tk.Frame(self.root, bg="#111111", highlightbackground="#00b4ff", highlightthickness=2)
                 self._busy_title = tk.Label(ov, fg="white", bg="#111111", font=("", 14, "bold"))
                 self._busy_title.pack(padx=30, pady=(18, 4))
                 self._busy_detail = tk.Label(ov, fg="#dddddd", bg="#111111", font=("", 10), justify="center")
                 self._busy_detail.pack(padx=30, pady=(0, 6))
                 tk.Label(ov, text="Please do not close snippysnappy until this finishes.",
-                         fg="#ffcc66", bg="#111111", font=("", 10)).pack(padx=30, pady=(0, 18))
+                         fg="#7fd4ff", bg="#111111", font=("", 10)).pack(padx=30, pady=(0, 18))
                 self._busy_frame = ov
             self._busy_base = title
             self._busy_dots = 0
@@ -5329,7 +5329,7 @@ class FilmApp:
                  ("white_border", "White/Black"), ("black_border", "Black/White")]
         self._pack_fill_dropdown(o, "Fill", fills, self._ed9_fill_t, self._ed9_set_text_fill)
         fams = list(C.TEXT_FONT_FAMILIES.keys())
-        fm = self._pack_dropdown(o, "Font", [(n, n) for n in fams], self._ed9_font, self._ed9_set_font, width=7)
+        fm = self._pack_dropdown(o, "Font", [(n, ("Comic" if n == "Comic Sans" else n)) for n in fams], self._ed9_font, self._ed9_set_font, width=7)
         try:
             inner = fm["menu"]
             for i, n in enumerate(fams):
@@ -10489,3 +10489,8 @@ _p33_pan_drag = FilmApp._z_pan_drag
 
 # ---- patch 41: the _pN_ monkeypatch chains are folded into plain class methods ----
 _p41_installed = True
+
+
+# ---- one recoverable Escape for every film edit tool (same behaviour as the image editor) ----
+from . import esc_behavior as _esc_behavior
+_esc_behavior.install_film(FilmApp)

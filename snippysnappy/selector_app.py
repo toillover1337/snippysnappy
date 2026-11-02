@@ -1,4 +1,4 @@
-# snippysnappy v1.0.4
+# snippysnappy v1.0.5
 """The main capture/annotation window - by far the largest module here (SelectorApp), covering selection, all edit tools (pen/highlight/spray/eraser/shape/text/snip), resize, OCR, magnify, measure, layers, tabs/windows panel, and the Pin toolbar entry point. Kept as one class/module rather than split further for this first compartmentalization pass - see HANDOVER.md."""
 import math
 import os
@@ -38,6 +38,57 @@ from .dialogs import confirm_discard
 from .side_panel import make_scrollable, add_window_row, SCROLLBAR_WIDTH, RowReorder, ordered, move_in_order, inline_rename, window_name, small_button, attach_tooltip, window_tab_labels, install_button_tooltips, style_menu_like_small_button, build_windows_rows
 from .coordinator import request_remote_window_rename, broadcast_window_roster, remote_window_tab_labels, remote_window_hidden, request_remote_window_hide
 from .constants import PANEL_START_AT_TOP, IMAGE_REVIEW_MONITOR
+
+class _DropMenuStub:
+    """Stands in for the old OptionMenu's inner tk.Menu: callers only use entryconfig(i, font=...) to preview fonts."""
+
+    def __init__(self):
+        self.fonts = {}
+
+    def entryconfig(self, index, **kw):
+        if "font" in kw:
+            self.fonts[int(index)] = kw["font"]
+
+    entryconfigure = entryconfig
+
+
+class _DropButton(tk.Menubutton):
+    """A dropdown button that opens our own popup list (see SelectorApp._pack_dropdown)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._stub = _DropMenuStub()
+
+    def __getitem__(self, key):
+        if key == "menu":
+            return self._stub
+        return super().__getitem__(key)
+
+
+_MENU_STYLE = {}
+
+
+def _menu_style(root):
+    """The colours/relief of a stock tk.Menu on this system (what the old OptionMenu popup looked like)."""
+    if not _MENU_STYLE:
+        m = tk.Menu(root)
+        try:
+            _MENU_STYLE.update(
+                bg=str(m.cget("background")), fg=str(m.cget("foreground")),
+                abg=str(m.cget("activebackground")), afg=str(m.cget("activeforeground")),
+                font="TkMenuFont",
+            )
+        except tk.TclError:
+            _MENU_STYLE.update(bg="#d9d9d9", fg="#000000", abg="#ececec", afg="#000000", font="TkMenuFont")
+        finally:
+            m.destroy()
+    return _MENU_STYLE
+
+
+def _short_font_label(name):
+    """Dropdown label for a font family: 'Comic Sans' is too wide for the button."""
+    return {"Comic Sans": "Comic"}.get(name, name)
+
 
 class SelectorApp:
     def __init__(self, *args, **kwargs):
@@ -1214,6 +1265,19 @@ class SelectorApp:
         self.clear_handles()
         self.active_handle = None
         self.start_x, self.start_y = cx, cy
+        self._prev_rect_coords = None
+        if self.rect:
+            try:
+                self._prev_rect_coords = tuple(self.canvas.coords(self.rect))   # to bring it back after a plain click
+            except tk.TclError:
+                pass
+        if not self._prev_rect_coords and self.sel_coords:
+            # e.g. an opened image starts fully selected with handles only, no rectangle item yet
+            try:
+                x1, y1, x2, y2 = self.sel_coords
+                self._prev_rect_coords = (*self.img_to_canvas(x1, y1), *self.img_to_canvas(x2, y2))
+            except Exception:
+                self._prev_rect_coords = None
         if self.rect:
             self.canvas.delete(self.rect)
         self.rect = self.canvas.create_rectangle(
@@ -1244,8 +1308,40 @@ class SelectorApp:
             self._show_dim_overlay(cx, cy, f"{round(w)} x {round(h)}")
         self._log_if_slow("on_drag", _t0)
 
+    def _restore_after_plain_click(self, event):
+        """
+        A click on the selection (press + release without dragging) used to throw the selection away: the
+        press replaced it with a zero-size rectangle, which the release then adopted - so the selector seemed
+        to vanish. Put the previous selection back instead. True if that happened.
+        """
+        prev = getattr(self, "_prev_rect_coords", None)
+        self._prev_rect_coords = None
+        if self.active_handle or not self.rect or not prev or len(prev) != 4 or self.mode == "monitor":
+            return False
+        try:
+            cx, cy = self._event_canvas_xy(event)
+            if abs(cx - self.start_x) > 4 or abs(cy - self.start_y) > 4:
+                return False
+            self.canvas.delete(self.rect)
+            self.rect = self.canvas.create_rectangle(*prev, outline="#00b4ff", width=2)
+            x1, y1, x2, y2 = prev
+            ix1, iy1 = self.canvas_to_img(min(x1, x2), min(y1, y2))
+            ix2, iy2 = self.canvas_to_img(max(x1, x2), max(y1, y2))
+            self.sel_coords = (ix1, iy1, ix2, iy2)
+            self._clear_dim_overlay()
+            self.draw_handles()
+            self.show_main_toolbar()
+            log.info("Plain click on the selection - kept the previous selection")
+            return True
+        except Exception:
+            log.exception("restoring the selection after a plain click failed (non-fatal)")
+            return False
+
     def on_release(self, event):
         before = getattr(self, "_sel_before_press", None)
+        if self._restore_after_plain_click(event):
+            self._sel_before_press = None
+            return
         r = self.on_release_base(event)
         try:
             if before and before[0] is not None and before[1] == "window" and self.mode == "window" and tuple(before[0]) != tuple(self.sel_coords):
@@ -2840,6 +2936,19 @@ class SelectorApp:
                             pass
                 for ms in (0, 60):
                     self.canvas.after(ms, ensure)
+
+                def _click_focus(_e, t=tw):
+                    # A click in the box must also win KEYBOARD focus: Tk's own click handling only moves Tk's
+                    # internal focus, which does nothing while another window still owns the X input focus
+                    # (the box then looks active - cursor/selection shown - but typing goes nowhere).
+                    try:
+                        top = self.canvas.winfo_toplevel()
+                        if top.focus_displayof() is None:
+                            top.focus_force()
+                        t.focus_set()
+                    except Exception:
+                        pass
+                tw.bind("<ButtonPress-1>", _click_focus, add="+")
         except Exception:
             log.exception("text box focus setup failed (non-fatal)")
         return r
@@ -4876,11 +4985,122 @@ class SelectorApp:
         def _on_choice(chosen_label):
             command(value_by_label[chosen_label])
 
-        menu = tk.OptionMenu(parent, var, *[lbl for _val, lbl in options], command=_on_choice)
+        # Our own popup instead of tk.OptionMenu: one click opens it, ONE click anywhere else (or on the
+        # button again) closes it, Escape / Up / Down / Return work, and the Font list can preview each font.
+        menu = _DropButton(parent, textvariable=var, indicatoron=True, relief="raised", anchor="c",
+                           highlightthickness=2, pady=BUTTON_PADY)
         if width is not None:
             menu.config(width=width)
-        menu.config(pady=BUTTON_PADY)
         menu.pack(side="left", padx=2, pady=4)
+        labels = [lbl for _val, lbl in options]
+        st = {"win": None, "rows": [], "sel": 0, "fid": None}
+
+        def _close(_e=None):
+            win = st["win"]
+            if win is None:
+                return
+            st["win"] = None
+            if st["fid"] is not None:
+                try:
+                    self.root.unbind("<ButtonPress-1>", st["fid"])
+                except Exception:
+                    pass
+                st["fid"] = None
+            try:
+                win.grab_release()
+            except tk.TclError:
+                pass
+            try:
+                win.destroy()
+            except tk.TclError:
+                pass
+
+        def _pick(i):
+            label = labels[i]
+            _close()
+            var.set(label)
+            _on_choice(label)
+
+        def _hilite(i):
+            st["sel"] = i
+            ms = _menu_style(self.root)
+            for k, row in enumerate(st["rows"]):
+                if k == i:
+                    row.configure(bg=ms["abg"], fg=ms["afg"], relief="raised")
+                else:
+                    row.configure(bg=ms["bg"], fg=ms["fg"], relief="flat")
+
+        def _open(_e=None):
+            if st["win"] is not None:
+                _close()
+                return "break"
+            win = tk.Toplevel(self.root)
+            st["win"] = win
+            win.overrideredirect(True)
+            ms = _menu_style(self.root)
+            win.configure(bg=ms["bg"])
+            inner = tk.Frame(win, bg=ms["bg"], bd=2, relief="raised")
+            inner.pack(fill="both", expand=True)
+            st["rows"] = []
+            fonts = menu["menu"].fonts
+            cur = var.get()
+            for i, lbl in enumerate(labels):
+                kw = {"font": fonts[i] if i in fonts else ms["font"]}
+                row = tk.Label(inner, text=lbl, anchor="w", fg=ms["fg"], bg=ms["bg"], padx=8, pady=3,
+                               bd=1, relief="flat", **kw)
+                row.pack(fill="x")
+                row.bind("<Enter>", lambda _e, i=i: _hilite(i))
+                row.bind("<ButtonRelease-1>", lambda _e, i=i: _pick(i))
+                st["rows"].append(row)
+            win.update_idletasks()
+            w = max(win.winfo_reqwidth(), menu.winfo_width())
+            h = win.winfo_reqheight()
+            x = menu.winfo_rootx()
+            y = menu.winfo_rooty() + menu.winfo_height()
+            if y + h > win.winfo_screenheight():
+                y = max(0, menu.winfo_rooty() - h)
+            x = max(0, min(x, win.winfo_screenwidth() - w))
+            win.geometry(f"{w}x{h}+{x}+{y}")
+            for row in st["rows"]:
+                row.pack_configure(fill="x")
+            _hilite(labels.index(cur) if cur in labels else 0)
+            win.bind("<Escape>", _close)
+            win.bind("<Up>", lambda _e: _hilite((st["sel"] - 1) % len(labels)))
+            win.bind("<Down>", lambda _e: _hilite((st["sel"] + 1) % len(labels)))
+            win.bind("<Return>", lambda _e: _pick(st["sel"]))
+
+            def _outside(e):
+                # any press outside the popup closes it - that click is consumed, so ONE click is enough
+                if st["win"] is None:
+                    return
+                try:
+                    inside = (win.winfo_rootx() <= e.x_root < win.winfo_rootx() + win.winfo_width()
+                              and win.winfo_rooty() <= e.y_root < win.winfo_rooty() + win.winfo_height())
+                except tk.TclError:
+                    inside = False
+                if not inside:
+                    _close()
+                    return "break"
+
+            win.bind("<ButtonPress-1>", _outside)
+            st["fid"] = self.root.bind("<ButtonPress-1>", _outside, add="+")
+            win.lift()
+            try:
+                win.focus_force()
+            except tk.TclError:
+                pass
+            try:
+                win.grab_set_global()
+            except tk.TclError:
+                try:
+                    win.grab_set()
+                except tk.TclError:
+                    pass
+            win.after(60000, _close)   # safety net: never leave a grab behind
+            return "break"
+
+        menu.bind("<ButtonPress-1>", _open)
+        menu.bind("<Destroy>", lambda _e: _close(), add="+")
         return menu
 
     _FILL_SWATCH_COLORS = {
@@ -5090,7 +5310,7 @@ class SelectorApp:
             self.text_bg_fill, self.set_text_bg_fill,
         )
 
-        font_options = [(name, name) for name in TEXT_FONT_FAMILIES]
+        font_options = [(name, _short_font_label(name)) for name in TEXT_FONT_FAMILIES]
         font_menu = self._pack_dropdown(context_row, "Font", font_options, self.text_font_family, self.set_text_font_family, width=7)
         try:
             inner_menu = font_menu["menu"]
@@ -9014,7 +9234,16 @@ class SelectorApp:
             else:
                 self.show_main_toolbar()
 
-        ask_save_as(self.root, "Save image as", image_types, _paths_setup.get_dir("snaps"), f"snipsnap-{timestamp()}", do_save)
+        # An image opened with --open: default to saving over the original (same folder, name and type);
+        # the dialog still asks before overwriting. Everything else keeps the usual snaps folder.
+        src = getattr(self, "opened_from", None)
+        if src is not None and Path(src).parent.is_dir():
+            ext = Path(src).suffix.lower().lstrip(".")
+            ext = {"jpeg": "jpg", "tif": "tiff"}.get(ext, ext)
+            ask_save_as(self.root, "Save image as", image_types, Path(src).parent, Path(src).stem, do_save,
+                        default_ext=ext if ext in dict(image_types) else None)
+        else:
+            ask_save_as(self.root, "Save image as", image_types, _paths_setup.get_dir("snaps"), f"snipsnap-{timestamp()}", do_save)
 
     def do_slop_save(self):
         path = _paths_setup.get_dir("sloppysnaps") / f"sloppysnap-{timestamp()}.png"

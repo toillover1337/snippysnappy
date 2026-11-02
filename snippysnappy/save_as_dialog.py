@@ -1,4 +1,4 @@
-# snippysnappy v1.0.4
+# snippysnappy v1.0.5
 """
 Save As dialog shared by image and film windows: a file-type dropdown, a
 folder box with fuzzy directory autocomplete (directories only, never
@@ -60,7 +60,7 @@ def suggest_dirs(text, limit=8):
     return [os.path.join(parent, n) for _r, _l, n in ranked[:limit]]
 
 
-def ask_save_as(parent, title, type_options, default_dir, default_name, on_confirm):
+def ask_save_as(parent, title, type_options, default_dir, default_name, on_confirm, default_ext=None):
     """type_options: [(ext, label), ...]. Calls on_confirm(directory: Path, filename: str, ext: str) once confirmed."""
     dlg = tk.Toplevel(parent)
     dlg.title(title)
@@ -75,7 +75,7 @@ def ask_save_as(parent, title, type_options, default_dir, default_name, on_confi
     labels = [label for _e, label in type_options]
     ext_by_label = {label: ext for ext, label in type_options}
     known_exts = {ext for ext, _l in type_options}
-    type_var = tk.StringVar(value=labels[0])
+    type_var = tk.StringVar(value=next((l for e, l in type_options if e == default_ext), labels[0]))
     tk.OptionMenu(type_row, type_var, *labels).pack(side="left")
 
     folder_row = tk.Frame(dlg, bg="#222222")

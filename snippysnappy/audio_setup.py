@@ -1,4 +1,4 @@
-# snippysnappy v1.0.4
+# snippysnappy v1.0.5
 """Audio capture helpers: source discovery, the --audio prompt window, and per-recording audio choices."""
 import subprocess
 import tkinter as tk

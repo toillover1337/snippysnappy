@@ -1,4 +1,4 @@
-# snippysnappy v1.0.4
+# snippysnappy v1.0.5
 """OCR (tesseract) invocation, image preprocessing to improve OCR accuracy, and a small hex-color utility."""
 from .logging_setup import log, run_logged
 

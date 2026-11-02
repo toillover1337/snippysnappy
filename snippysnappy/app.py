@@ -1,4 +1,4 @@
-# snippysnappy v1.0.4
+# snippysnappy v1.0.5
 """Entry point: CLI argument parsing and the top-level dispatch (select/fullscreen/window/open/nil/pin-view modes)."""
 import argparse
 import os
@@ -262,6 +262,11 @@ def main():
         help=argparse.SUPPRESS,   # internal only - opens an existing film in its own Snippyfilm window (used by the film window's "+ Open File...")
     )
     parser.add_argument(
+        "--debug", action="store_true",
+        help="Log at DEBUG level for this run only (overrides LOG_LEVEL in config.py; nothing is saved). "
+             "Also applies to pins/film windows this run starts.",
+    )
+    parser.add_argument(
         "--pin-id", metavar="UUID", default=None,
         help=argparse.SUPPRESS,   # internal only - see --pin-view/_launch_pinned_region: lets the LAUNCHING window recognize this pin as its own in the Pins list
     )
@@ -327,6 +332,11 @@ def main():
         ),
     )
     args = parser.parse_args()
+    if args.debug:
+        os.environ["SNIPPYSNAPPY_DEBUG"] = "1"   # inherited by pins / film windows / restarts started from this run
+        from .logging_setup import set_log_level
+        set_log_level("DEBUG")
+        log.warning("--debug: DEBUG logging is on for this run (log file: see LOG_PATH)")
     if args.pin_view is not None:
         # Entirely separate code path: no capture, no coordinator, no
         # document model - just a minimal floating image viewer
@@ -637,10 +647,11 @@ def main():
             shutil.copy(open_path, work_path)
             log.info(f"Opening existing image: {open_path}")
             root.deiconify()
-            SelectorApp(
+            _opened_app = SelectorApp(
                 root, work_path, mode="window", bounds=(mx, my, mw, mh), auto_select_full=True,
                 monitors=monitors, capture_tempdir=tmp,
             )
+            _opened_app.opened_from = open_path   # Save As defaults to the original's folder/name/type
         elif args.nil is not None:
             nil_w, nil_h, nil_color = parse_nil_args(args.nil)
             log.info(f"--nil: starting with a blank {nil_w}x{nil_h} canvas ({nil_color}), no screenshot taken")

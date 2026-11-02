@@ -1,4 +1,4 @@
-# snippysnappy v1.0.4
+# snippysnappy v1.0.5
 r"""
 Film/audio effect registry and plugin loader.
 
@@ -20,8 +20,11 @@ Minimal plugin (an audio effect; it also shows up in the Audio tool's Type menu)
         # c.t = the ffmpeg time expression to use inside enable=/expressions, c.enable = between(<t>,start,end)
         return f"bass=g={c.p['gain']}:enable='{c.enable}'"
 
-    register_effect(id="bassboost", kind="audio", label="Bass boost", build=build,
+    register_effect(id="bassboost", kind="audio", label="Bass boost", build=build, default_len=None,
                     params=[Param("gain", "Gain (dB)", "int", default=8, lo=0, hi=24)])
+
+default_len = how long a new layer is, in seconds, starting at the playhead (default 1.0). Use default_len=None for an
+effect that should cover the whole film (bass boost, EQ, ...) - without it the effect only affects ONE second.
 
 For kind="video", build(c) returns either a plain ffmpeg filter chain ("vignette=angle=0.6:enable='...'"), or a full
 graph fragment that reads label c.src and writes label c.dst (use c.tmp("a") for extra unique labels):
@@ -78,8 +81,10 @@ Example (save as bassboost.py):
     def build(c):
         return f"bass=g={c.p['gain']}:enable='{c.enable}'"
 
-    register_effect(id="bassboost", kind="audio", label="Bass boost", build=build,
+    register_effect(id="bassboost", kind="audio", label="Bass boost", build=build, default_len=None,
                     params=[Param("gain", "Gain (dB)", "int", default=8, lo=0, hi=24)])
+
+(default_len=None makes a new layer cover the whole film; the default is 1 second from the playhead.)
 
 Audio effects appear in the Audio tool's Type menu; video effects in
 Film > Mode: Effects. Full API notes: see the docstring of snippysnappy/effects.py.

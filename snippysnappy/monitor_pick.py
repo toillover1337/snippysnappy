@@ -1,4 +1,4 @@
-# snippysnappy v1.0.4
+# snippysnappy v1.0.5
 """Chooses which monitor a new decorated window opens on (see NEW_WINDOW_MONITOR in constants)."""
 import importlib
 

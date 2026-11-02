@@ -1,4 +1,4 @@
-# snippysnappy v1.0.4
+# snippysnappy v1.0.5
 """
 Screen recording: the ffmpeg x11grab backend, a minimal standalone
 region-picker for plain select mode (deliberately NOT reusing
@@ -446,7 +446,7 @@ def run_recording_session(x, y, w, h, monitor_bounds=None):
         # which can race ahead of the rest of this function. The flag must
         stop_state["intentional"] = True
         if meter is not None:
-            log.warning(f"Recorder: loudest meter level this recording {meter_state.get('peak', 0.0) * 50 - 50:.1f} dBFS (red above {red_db:.1f})")
+            log.debug(f"Recorder: loudest meter level this recording {meter_state.get('peak', 0.0) * 50 - 50:.1f} dBFS (red above {red_db:.1f})")
             meter.stop()
         try:
             # recorder.stop() can block for several seconds while ffmpeg finalises the file

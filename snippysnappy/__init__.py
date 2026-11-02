@@ -1,4 +1,4 @@
-# snippysnappy v1.0.4
+# snippysnappy v1.0.5
 """
 snippysnappy - a lightweight screenshot capture with adjustable selection,
 free-hand edit (pen/highlighter), magnifier, measurement tool, and OCR text
@@ -86,7 +86,10 @@ from .coordinator import (
     request_remote_focus, request_remote_pin_close, request_remote_merge,
     _handle_incoming_merge_message,
 )
+from . import slider_keys   # Scale sliders: click to focus, arrows step (Shift = 5)
 from .selector_app import SelectorApp
+from . import esc_behavior
+esc_behavior.install_image(SelectorApp)   # one recoverable Escape for every edit tool
 from .pin_viewer import run_pin_viewer
 from .app import main
 

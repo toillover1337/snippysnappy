@@ -1,4 +1,4 @@
-# snippysnappy v1.0.4
+# snippysnappy v1.0.5
 """
 Shared side-panel helpers for the image windows (selector_app.py) and the
 film window (film_viewer.py):

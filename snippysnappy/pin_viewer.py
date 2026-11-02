@@ -1,4 +1,4 @@
-# snippysnappy v1.0.4
+# snippysnappy v1.0.5
 """The floating Pin viewer window (run_pin_viewer) - a separate lightweight, borderless Tk window per pinned region, with hover-to-reveal controls, resize/lock/maximize/minimize, and cross-process discovery via the coordinator's pin registry."""
 import math
 import os
@@ -348,6 +348,23 @@ def run_pin_viewer(path, forced_pin_id=None, proportional=True):
         bsx, bsy, _bx, _by = state["baseline"]
         return abs(state["scale_x"] - bsx) < 1e-6 and abs(state["scale_y"] - bsy) < 1e-6
 
+    def _pin_min_box():
+        """
+        The smallest box a pin may be padded to: at least PIN_MIN_CONTENT_*, and wide/tall enough that the
+        top button rows (left + right cluster side by side), the opacity slider and a video pin's playback
+        bar never overlap or cover each other.
+        """
+        try:
+            left_w = sum(b.winfo_reqwidth() for b in (restore_btn, copy_btn, save_btn, resize_btn))
+            right_w = sum(b.winfo_reqwidth() for b in (pin_btn, min_btn, max_btn, close_btn))
+            top_h = max(b.winfo_reqheight() for b in (copy_btn, close_btn))
+            slider_h = opacity_scale.winfo_reqheight() + 4
+            need_w = left_w + right_w + 8
+            need_h = top_h + slider_h + _VIDEO_BAR_H[0] + 8
+        except tk.TclError:
+            return PIN_MIN_CONTENT_WIDTH, PIN_MIN_CONTENT_HEIGHT
+        return max(PIN_MIN_CONTENT_WIDTH, need_w), max(PIN_MIN_CONTENT_HEIGHT, need_h)
+
     def compute_view_layout():
         """
         Single source of truth for how the pin is laid out, shared by
@@ -364,9 +381,9 @@ def run_pin_viewer(path, forced_pin_id=None, proportional=True):
         h = max(1, int(round(original.height * state["scale_y"])))
         if state["maximized"] and state["max_box_size"] is not None:
             box_w, box_h = state["max_box_size"]
-        elif w < PIN_MIN_CONTENT_WIDTH or h < PIN_MIN_CONTENT_HEIGHT:
-            box_w = max(w, PIN_MIN_CONTENT_WIDTH)
-            box_h = max(h, PIN_MIN_CONTENT_HEIGHT)
+        elif w < _pin_min_box()[0] or h < _pin_min_box()[1]:
+            box_w = max(w, _pin_min_box()[0])
+            box_h = max(h, _pin_min_box()[1])
         else:
             box_w, box_h = w, h
         z = state["view_zoom"]
@@ -1107,6 +1124,14 @@ def run_pin_viewer(path, forced_pin_id=None, proportional=True):
     control_bar_right.bind("<Leave>", schedule_hide_controls)
     label.bind("<ButtonPress-1>", on_drag_press)
     label.bind("<B1-Motion>", on_drag_motion)
+    # The padding around a small image (the black area) is the window itself: dragging there moves the pin
+    # too, and so do right-click (pin/unpin) and the mouse wheel (zoom). Events that bubble up from the
+    # picture or the buttons are ignored here - they have their own handlers.
+    root.bind("<ButtonPress-1>", lambda e: on_drag_press(e) if e.widget is root else None, add="+")
+    root.bind("<B1-Motion>", lambda e: on_drag_motion(e) if e.widget is root else None, add="+")
+    root.bind("<ButtonPress-3>", lambda e: toggle_locked(e) if e.widget is root else None, add="+")
+    root.bind("<Button-4>", lambda e: on_scroll_zoom(1, e) if e.widget is root else None, add="+")
+    root.bind("<Button-5>", lambda e: on_scroll_zoom(-1, e) if e.widget is root else None, add="+")
     if sim["on"]:   # simulated opacity must not hide the pin in the middle of a drag
         root.bind_all("<ButtonPress-1>", lambda e: sim.__setitem__("held", True), add="+")
         root.bind_all("<ButtonRelease-1>", lambda e: sim.__setitem__("held", False), add="+")
