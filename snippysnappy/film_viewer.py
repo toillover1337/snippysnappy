@@ -6214,7 +6214,8 @@ class FilmApp:
             vol = float(a.get("vol", 1.0))
             if abs(vol - 1.0) > 0.001:
                 fl.append(f"volume={vol:.3f}")
-            fl += [self._p3_filter(l, off) for l in self._p2_layers if l.get("tracks") is not None and i in l["tracks"]]
+            fl += [self._p3_filter(l, off) for l in self._p2_layers
+                   if l.get("tracks") is not None and i in l["tracks"] and self._p29_overlaps(l, getattr(_p29_tls, "chunk", None))]
             parts.append(f"[0:a:{i}]{','.join(fl) if fl else 'anull'}[a{i}]")
             kept.append(f"a{i}")
         if not kept:
@@ -6224,7 +6225,8 @@ class FilmApp:
             cur = "amix"
         else:
             cur = kept[0]
-        allfl = [self._p3_filter(l, off) for l in self._p2_layers if l.get("tracks") is None]
+        allfl = [self._p3_filter(l, off) for l in self._p2_layers
+                 if l.get("tracks") is None and self._p29_overlaps(l, getattr(_p29_tls, "chunk", None))]
         if allfl:
             parts.append(f"[{cur}]{','.join(allfl)}[agl]")
             cur = "agl"
@@ -8047,6 +8049,8 @@ class FilmApp:
             s, e = self._ed_range(l)
             if e - s < 0.01:
                 continue
+            if not self._p29_overlaps(l, getattr(_p29_tls, "chunk", None)):
+                continue
             dst = f"fx{i}"
             try:
                 frag = _fx.build_video(eff, l.get("params"), s, e, last, dst, width=pw, height=ph,
@@ -8164,13 +8168,31 @@ class FilmApp:
         self._p25_state()
         self._p10_state()
         parts = []
+        self._p2_state()
         for name in ("film_edits", "film_layers", "_ed5_trim", "_ed5_crop", "_ed5_scale", "_ed5_audio",
-                     "_p10_segs", "_p25_layers", "_p13_out", "_p13_bg"):
+                     "_p2_layers", "_p10_segs", "_p25_layers", "_p13_out", "_p13_bg"):
             v = getattr(self, name, None)
             if name == "_ed5_audio" and v and all((not a.get("mute")) and a.get("vol", 1.0) == 1.0 for a in v):
                 v = []            # the per-track list is filled in lazily; all-default means the same as empty
             parts.append(repr(v))
+        parts.append(self._p29_file_stamps())
         return "|".join(parts)
+
+    def _p29_file_stamps(self):
+        """Size+mtime of the source film and of every file spliced in: replacing one on disk must refresh the preview too."""
+        paths = [self.video_path]
+        try:
+            paths += [s["ins"].get("path") for s in (self._p10_segs or []) if s.get("ins") and s["ins"].get("path")]
+        except Exception:
+            pass
+        out = []
+        for pth in paths:
+            try:
+                st = os.stat(pth)
+                out.append(f"{pth}:{st.st_size}:{st.st_mtime_ns}")
+            except OSError:
+                out.append(f"{pth}:missing")
+        return ";".join(out)
 
     def _p29_stale(self):
         """True when the edits changed since the file being shown was rendered."""
@@ -8180,10 +8202,14 @@ class FilmApp:
         self._p25_state()
         return any((_fx.get(l["type"]) is not None and _fx.get(l["type"]).kind == "video") for l in self._p25_layers)
 
-    def _p29_open(self, restart=False):
+    def _p29_open(self, restart=False, keep_pos=False):
         """Show the preview overlay and play (rendering the edits first when they changed)."""
         self._p29_state()
         self._pause()
+        keep = None
+        _ov0 = self._p29_overlay
+        if keep_pos and _ov0 is not None and _ov0.alive() and _ov0.path:
+            keep = _ov0.pos
         ov = self._p29_overlay
         if ov is None or not ov.alive():
             ov = self._p29_overlay = _P29Overlay(self)
@@ -8203,6 +8229,8 @@ class FilmApp:
                 return
             if o.path != str(path):
                 o.load(path)
+                if keep is not None:
+                    o.pos = max(0, min(int(keep), max(0, o.total - 1)))
             o.play(0 if restart or o.pos >= o.total - 1 else None)
 
         if sig == self._p29_sig and self._p29_file and os.path.exists(self._p29_file):
@@ -8215,6 +8243,13 @@ class FilmApp:
         dest = Path(tempfile.mkdtemp(prefix="snippysnappy-preview-"))
         _p29_atexit.register(_p29_shutil.rmtree, str(dest), True)
         self._p29_fast = True
+
+        def _progress(done, total):
+            try:
+                self.root.after(0, lambda: ov.message(f"Rendering preview… changed part {done + 1} of {total}") if ov.alive() else None)
+            except Exception:
+                pass
+        self._p29_progress = _progress
 
         def worker():
             out = None
@@ -8262,6 +8297,154 @@ class FilmApp:
             return
         self._p29_open(restart=True)
 
+    # ---- partial re-render: the preview is rendered in short chunks of source time; only chunks whose edits changed are redone ----
+
+    _P29_CHUNK_SECONDS = 3.0
+
+    def _p29_overlaps(self, layer, ck):
+        """Does this layer (text/shape layer, effect layer, audio layer) touch the chunk? Always True outside chunk mode."""
+        if not ck or layer is None:
+            return True
+        s, e = self._ed_range(layer)
+        return s < ck["b"] + 0.002 and e > ck["a"] - 0.002
+
+    def _p29_plan(self):
+        """Chunk boundaries in source seconds: the trimmed range (or the whole film), cut every ~3 s on a frame boundary."""
+        fps = max(1.0, float(self.fps or 25.0))
+        tv = self._ed5_trim_vals()
+        dur = float(self._ed_dur())
+        r0, r1 = (float(tv[0]), float(tv[1])) if tv else (0.0, dur)
+        if r1 >= dur - 0.05:
+            r1 = dur + 1.0 / fps          # _ed_dur is the LAST frame's time: reach one frame past it so that frame is kept
+        n = max(1, int(round(self._P29_CHUNK_SECONDS * fps)))
+        step = n / fps
+        chunks, i = [], 0
+        while r0 + i * step < r1 - 0.5 / fps:
+            a = r0 + i * step
+            chunks.append((i, a, min(r1, a + step)))
+            i += 1
+        return {"fps": fps, "r0": r0, "r1": r1, "n": n, "chunks": chunks}
+
+    def _p29_audio_tracks(self):
+        """Per-track volume/mute, with the lazily added all-default entries left out (they appear during a bake)."""
+        v = list(getattr(self, "_ed5_audio", None) or [])
+        while v and not v[-1].get("mute") and float(v[-1].get("vol", 1.0)) == 1.0:
+            v.pop()
+        return v
+
+    def _p29_chunk_sig(self, plan, a, b):
+        """Everything that decides what this chunk looks like: the global settings + the layers that overlap it."""
+        self._p25_state()
+        self._p2_state()
+        ck = {"a": a, "b": b}
+        g = [plan["fps"], plan["r0"], plan["n"], repr(getattr(self, "_ed5_crop", None)), repr(getattr(self, "_ed5_scale", None)),
+             repr(getattr(self, "_p13_out", None)), repr(getattr(self, "_p13_bg", None)), repr(self._p29_audio_tracks()),
+             [l.get("id") for l in self.film_layers], int(self.native_w), int(self.native_h), self._p29_file_stamps()]
+        loc = [(round(a, 4), round(b, 4))]
+        for l in self.film_layers:
+            if self._p29_overlaps(l, ck):
+                loc.append((repr(l), [repr(e) for e in self.film_edits if e.get("layer_id") == l.get("id")]))
+        loc.append([repr(l) for l in self._p25_layers if self._p29_overlaps(l, ck)])
+        loc.append([repr(l) for l in self._p2_layers if self._p29_overlaps(l, ck)])
+        return _p29_hashlib.sha1(repr((g, loc)).encode("utf-8", "replace")).hexdigest()
+
+    def _p29_bake_mid(self, dest_dir):
+        """The first bake pass: the normal one for exports, the chunked/cached one while rendering a preview."""
+        if getattr(self, "_p29_fast", False) and not getattr(self, "_p29_nochunk", False):
+            return self._p29_chunked(dest_dir)
+        return self._p13_bake(dest_dir)
+
+    def _p29_chunked(self, dest_dir):
+        self._p29_state()
+        cache = getattr(self, "_p29_cache", None)
+        if cache is None or not os.path.isdir(cache["dir"]):
+            d = tempfile.mkdtemp(prefix="snippysnappy-prevcache-")
+            _p29_atexit.register(_p29_shutil.rmtree, d, True)
+            cache = self._p29_cache = {"dir": d, "chunks": {}}
+        plan = self._p29_plan()
+        fps = plan["fps"]
+        h = 0.5 / fps
+        pre = 1.0 if getattr(self, "_p2_layers", None) else 0.0       # audio effects (echo, ...) need a little run-up
+        sigs = {i: self._p29_chunk_sig(plan, a, b) for i, a, b in plan["chunks"]}
+        todo = [i for i, a, b in plan["chunks"]
+                if cache["chunks"].get(i, (None, None))[0] != sigs[i] or not os.path.exists(cache["chunks"][i][1])]
+        here = int(max(0.0, self.frame_index / fps - plan["r0"]) // (plan["n"] / fps))
+        todo.sort(key=lambda i: (i < here, abs(i - here)))               # the part at the playhead first, then forward
+        for i in list(cache["chunks"]):
+            if i >= len(plan["chunks"]):
+                cache["chunks"].pop(i)
+        log.info(f"Film preview: {len(todo)} of {len(plan['chunks'])} chunk(s) need rendering")
+        for k, i in enumerate(todo):
+            cb = getattr(self, "_p29_progress", None)
+            if cb:
+                cb(k, len(todo))
+            _i, a, b = plan["chunks"][i]
+            seek = max(0.0, a - max(pre, h))
+            work = Path(cache["dir"]) / f"w{i}"
+            work.mkdir(parents=True, exist_ok=True)
+            outp = Path(cache["dir"]) / f"c{i}-{sigs[i][:8]}.mkv"
+            _p29_tls.chunk = {"a": a, "b": b, "seek": seek, "read": (b - seek) + 1.0 / fps, "vstart": a - h, "vend": (b if i == len(plan["chunks"]) - 1 else b - h),
+                              "out": str(outp)}
+            _fx.set_clip_cache(cache["dir"])
+            try:
+                self._p13_bake(work)
+            finally:
+                _p29_tls.chunk = None
+                _fx.set_clip_cache(None)
+                _p29_shutil.rmtree(work, ignore_errors=True)
+            old = cache["chunks"].get(i)
+            if self._p29_chunk_sig(plan, a, b) == sigs[i]:             # the edits did not move under the render
+                cache["chunks"][i] = (sigs[i], str(outp))
+            else:
+                cache["chunks"].pop(i, None)
+            if old and old[1] != str(outp):
+                try:
+                    os.unlink(old[1])
+                except OSError:
+                    pass
+        files = [cache["chunks"][i][1] for i, a, b in plan["chunks"] if i in cache["chunks"]]
+        if len(files) != len(plan["chunks"]):                           # edits changed while rendering: the caller sees it as stale
+            raise RuntimeError("the edits changed while the preview was rendering")
+        out = Path(dest_dir) / f"{Path(self.video_path).stem}-edited.mkv"
+        lst = Path(dest_dir) / "chunks.txt"
+        lst.write_text("".join("file '" + f.replace("'", "'\\''") + "'\n" for f in files), encoding="utf-8")
+        r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(out)],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        if r.returncode != 0:
+            raise RuntimeError("ffmpeg chunk join failed: " + r.stderr.decode("utf-8", "replace")[-800:])
+        return out
+
+    def _p29_refresh(self):
+        """Re-render the preview when the edits changed since it was rendered; keeps the playhead where it was."""
+        self._p29_state()
+        if self._p29_busy:
+            return
+        if not self._ed4_flags():
+            notify("Nothing to preview", "There are no edits yet", blocking=False)
+            return
+        if self._p29_file and os.path.exists(self._p29_file) and not self._p29_stale():
+            notify("Preview is up to date", "No edits changed since it was rendered", blocking=False)
+            return
+        self._p29_open(keep_pos=True)
+
+    def _p29_poll(self):
+        """While the Preview tool is open: colour Refresh red when the edits no longer match the rendered preview."""
+        rb = getattr(self, "_p29_rbtn", None)
+        if rb is None:
+            return
+        try:
+            if not rb.winfo_exists():
+                self._p29_rbtn = None
+                return
+            if self._p29_busy:
+                rb.config(text="Rendering…", fg="#00b4ff")
+            else:
+                stale = bool(self._p29_file) and os.path.exists(self._p29_file) and self._p29_stale()
+                rb.config(text=("Refresh (edits changed)" if stale else "Refresh"), fg=("#ff4444" if stale else "black"))
+            self._p29_poll_job = self.root.after(400, self._p29_poll)
+        except tk.TclError:
+            self._p29_rbtn = None
+
     def _p29_sync_buttons(self):
         b = getattr(self, "_p29_btn", None)
         if b is None:
@@ -8278,6 +8461,13 @@ class FilmApp:
         self._p29_btn = tk.Button(o, text="Play", pady=BUTTON_PADY, command=self._p29_play)
         self._p29_btn.pack(side="left", padx=2, pady=4)
         tk.Button(o, text="Restart", pady=BUTTON_PADY, command=self._p29_restart).pack(side="left", padx=2, pady=4)
+        self._p29_rbtn = tk.Button(o, text="Refresh", pady=BUTTON_PADY, command=self._p29_refresh)
+        self._p29_rbtn.pack(side="left", padx=2, pady=4)
+        try:
+            self.root.after_cancel(getattr(self, "_p29_poll_job", None))
+        except Exception:
+            pass
+        self._p29_poll()
         tk.Label(o, text="plays your edits as they are now (low-resolution render; nothing is changed)", fg="#aaaaaa", bg=bg).pack(side="left", padx=8)
         self._p29_sync_buttons()
 
@@ -8700,11 +8890,11 @@ class FilmApp:
         if not segs or not any(s.get("ins") for s in segs):
             segs_2 = self._p10_active_segs()
             if not segs_2:
-                return self._p13_bake(dest_dir)
+                return self._p29_bake_mid(dest_dir)
             segs_2 = [dict(s_11) for s_11 in segs_2]
             mid_dir_2 = Path(dest_dir) / "pass1"
             mid_dir_2.mkdir(parents=True, exist_ok=True)
-            mid_6 = self._p13_bake(mid_dir_2)
+            mid_6 = self._p29_bake_mid(mid_dir_2)
             src_2 = Path(self.video_path)
             out_3 = Path(dest_dir) / f"{src_2.stem}-edited.mkv"
             audio = _fa_audio_count(mid_6) > 0
@@ -8736,7 +8926,7 @@ class FilmApp:
         segs = [dict(s) for s in segs]
         mid_dir = Path(dest_dir) / "pass1"
         mid_dir.mkdir(parents=True, exist_ok=True)
-        mid = self._p13_bake(mid_dir)
+        mid = self._p29_bake_mid(mid_dir)
         src = Path(self.video_path)
         out = Path(dest_dir) / f"{src.stem}-edited.mkv"
         W, H, FPS, _n = probe_video(mid)
@@ -9048,7 +9238,14 @@ class FilmApp:
         out = Path(dest_dir) / f"{src.stem}-edited.mkv"
         order = {l["id"]: i for i, l in enumerate(self.film_layers)}
         els = [e for e in sorted(self.film_edits, key=lambda e: order.get(e.get("layer_id"), 0)) if self._ed_find(e.get("layer_id")) is not None]
-        cmd = ["ffmpeg", "-y", "-v", "error", "-i", str(src)]
+        ck = getattr(_p29_tls, "chunk", None)      # set only while a preview chunk is being rendered (see _p29_chunked)
+        if ck:
+            out = Path(ck["out"])
+            els = [e for e in els if self._p29_overlaps(self._ed_find(e.get("layer_id")), ck)]
+        cmd = ["ffmpeg", "-y", "-v", "error"]
+        if ck:     # keep the film's own timestamps so every between(t,...) in the chain still means source time
+            cmd += ["-copyts", "-ss", f"{ck['seek']:.4f}", "-t", f"{ck['read']:.4f}"]
+        cmd += ["-i", str(src)]
         chain = []
         last = "0:v"
         crop = self._ed5_crop
@@ -9092,7 +9289,9 @@ class FilmApp:
         elif sc != 1.0:
             post.append(f"scale=trunc(iw*{float(sc)}/2)*2:trunc(ih*{float(sc)}/2)*2:flags=lanczos")
         post.append("pad=ceil(iw/2)*2:ceil(ih/2)*2")
-        tv = self._ed5_trim_vals()
+        tv = None if ck else self._ed5_trim_vals()
+        if ck:
+            post.append(f"trim=start={ck['vstart']:.4f}:end={ck['vend']:.4f},setpts=PTS-STARTPTS")
         tparts = ""
         if tv:
             dur = self._ed_dur()
@@ -9107,11 +9306,15 @@ class FilmApp:
             aparts, acur = self._p2_audio_chain(n_aud, 0.0)
             if acur is not None:
                 chain += aparts
-                if tv:
+                if ck:
+                    chain.append(f"[{acur}]atrim=start={ck['a']:.4f}:end={ck['b']:.4f},asetpts=PTS-STARTPTS[aout]")
+                elif tv:
                     chain.append(f"[{acur}]atrim={tparts},asetpts=PTS-STARTPTS[aout]")
                 else:
                     chain.append(f"[{acur}]anull[aout]")
                 audio_args = ["-map", "[aout]", "-c:a", "aac", "-b:a", "192k"]
+                if ck:     # raw audio in the chunks: no AAC priming gap where the chunks are joined
+                    audio_args = ["-map", "[aout]", "-c:a", "pcm_s16le"]
         cmd += ["-filter_complex", ";".join(chain), "-map", "[vout]"] + audio_args + self._p29_venc() + [
             "-pix_fmt", "yuv420p", str(out)]
         r = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -10192,6 +10395,8 @@ def _p25_sync_audio_types():
 # ---- patch 29: Preview tool + effects preview (_p29_preview) ----
 import shutil as _p29_shutil
 import atexit as _p29_atexit
+import hashlib as _p29_hashlib
+_p29_tls = _fs_threading.local()
 
 
 class _P29Overlay:

@@ -19,7 +19,7 @@ from ._paths import INSTALL_DIR
 from .logging_setup import log, run_logged, popen_logged
 from .icon import _load_app_icon
 from . import paths_setup as _paths_setup
-from .capture import _X11EscapePoller, cached_open
+from .capture import _X11EscapePoller, cached_open, wait_written as _wait_written
 from .capture import (BACKEND, get_monitors, monitor_at_point, capture_full_screen, capture_monitor, select_window_id)
 from .clipboard import (copy_image_to_clipboard, copy_text_to_clipboard, get_system_clipboard_image, get_system_clipboard_text)
 from .ocr import ocr_image, preprocess_for_ocr, hex_to_rgb
@@ -2052,6 +2052,8 @@ class SelectorApp:
             relief=("sunken" if active == "pin" else "raised"),
             command=lambda: self._switch_tool("pin", self.enter_pin_mode),
         ).pack(side="left", padx=2, pady=4)
+        if active in ("measure", "magnify"):
+            self._pack_screenshot_button(main_row)
         if back is not None:
             tk.Button(main_row, text="Back", pady=BUTTON_PADY, command=back).pack(side="left", padx=(10, 2), pady=4)
         if undo is not None:
@@ -2062,6 +2064,193 @@ class SelectorApp:
             tk.Button(main_row, text="Cancel", pady=BUTTON_PADY, command=cancel).pack(side="left", padx=(10, 2), pady=4)
         if done is not None:
             tk.Button(main_row, text="Done", pady=BUTTON_PADY, command=done).pack(side="left", padx=((10, 2) if cancel is None else 2), pady=4)
+
+    # ---- Screenshot (Measure and Magnify): one click grabs what the canvas shows right now ----
+    _SHOT_ACTIONS = [("save", "Save"), ("copy", "Copy"), ("both", "Copy and save")]
+
+    def _pack_screenshot_button(self, parent):
+        """Split button: [Screenshot] does the chosen action at once, [v] picks it (Save / Copy / Copy and save)."""
+        grp = tk.Frame(parent, bg="#222222")
+        grp.pack(side="left", padx=(8, 2), pady=4)
+        tk.Button(grp, text="Screenshot", pady=BUTTON_PADY, command=self._view_screenshot).pack(side="left", padx=(0, 0))
+        arrow = tk.Menubutton(grp, text="\u25be", relief="raised", pady=BUTTON_PADY, padx=3, highlightthickness=2)
+        arrow.pack(side="left", padx=(1, 0))
+        st = {"win": None, "fid": None}
+
+        def _close(_e=None):
+            win, st["win"] = st["win"], None
+            if st["fid"] is not None:
+                try:
+                    self.root.unbind("<ButtonPress-1>", st["fid"])
+                except Exception:
+                    pass
+                st["fid"] = None
+            if win is not None:
+                for fn in (win.grab_release, win.destroy):
+                    try:
+                        fn()
+                    except tk.TclError:
+                        pass
+
+        def _pick(key):
+            _close()
+            self._shot_action = key
+
+        def _open(_e=None):
+            if st["win"] is not None:
+                _close()
+                return "break"
+            win = tk.Toplevel(self.root)
+            st["win"] = win
+            win.overrideredirect(True)
+            ms = _menu_style(self.root)
+            win.configure(bg=ms["bg"])
+            inner = tk.Frame(win, bg=ms["bg"], bd=2, relief="raised")
+            inner.pack(fill="both", expand=True)
+            cur = self._shot_action_now()
+            for key, label in self._SHOT_ACTIONS:
+                chosen = key == cur
+                row = tk.Label(inner, text=("\u25cf  " if chosen else "     ") + label, anchor="w", font=ms["font"], padx=8, pady=3, bd=1,
+                               fg=(ms["afg"] if chosen else ms["fg"]), bg=(ms["abg"] if chosen else ms["bg"]), relief=("raised" if chosen else "flat"))
+                row.pack(fill="x")
+                row.bind("<ButtonRelease-1>", lambda _e, k=key: _pick(k))
+                row.bind("<Enter>", lambda _e, r=row: r.configure(relief="raised"))
+                row.bind("<Leave>", lambda _e, r=row, c=chosen: r.configure(relief=("raised" if c else "flat")))
+            win.update_idletasks()
+            w, h = max(win.winfo_reqwidth(), arrow.winfo_width()), win.winfo_reqheight()
+            x, y = arrow.winfo_rootx(), arrow.winfo_rooty() + arrow.winfo_height()
+            if y + h > win.winfo_screenheight():
+                y = max(0, arrow.winfo_rooty() - h)
+            x = max(0, min(x, win.winfo_screenwidth() - w))
+            win.geometry(f"{w}x{h}+{x}+{y}")
+            win.bind("<Escape>", _close)
+
+            def _outside(e):
+                if st["win"] is None:
+                    return
+                try:
+                    inside = (win.winfo_rootx() <= e.x_root < win.winfo_rootx() + win.winfo_width()
+                              and win.winfo_rooty() <= e.y_root < win.winfo_rooty() + win.winfo_height())
+                except tk.TclError:
+                    inside = False
+                if not inside:
+                    _close()
+                    return "break"
+
+            win.bind("<ButtonPress-1>", _outside)
+            st["fid"] = self.root.bind("<ButtonPress-1>", _outside, add="+")
+            win.lift()
+            try:
+                win.focus_force()
+            except tk.TclError:
+                pass
+            try:
+                win.grab_set_global()
+            except tk.TclError:
+                try:
+                    win.grab_set()
+                except tk.TclError:
+                    pass
+            win.after(60000, _close)
+            return "break"
+
+        arrow.bind("<ButtonPress-1>", _open)
+        arrow.bind("<Destroy>", lambda _e: _close(), add="+")
+
+    def _shot_action_now(self):
+        a = getattr(self, "_shot_action", None)
+        if a not in ("save", "copy", "both"):
+            from . import constants as _c
+            a = getattr(_c, "SCREENSHOT_DEFAULT_ACTION", "copy")
+            a = a if a in ("save", "copy", "both") else "copy"
+            self._shot_action = a
+        return a
+
+    def _view_screenshot(self):
+        """Grab the canvas as it is on screen right now (measure boxes/lines, pinned lenses, ...) and Save / Copy / both."""
+        if getattr(self, "_shot_busy", False):
+            return
+        self._shot_busy = True
+        tb = info = None
+        try:   # the floating toolbar (overlay mode) sits on top of the picture: hide it for the grab
+            if self.toolbar_container is None and getattr(self, "toolbar", None) is not None and self.toolbar.winfo_manager() == "place":
+                tb, info = self.toolbar, {k: v for k, v in self.toolbar.place_info().items() if k != "in"}
+                tb.place_forget()
+            self.root.update_idletasks()
+        except tk.TclError:
+            tb = info = None
+        self.root.after(180, lambda: self._view_screenshot_grab(tb, info))
+
+    def _view_screenshot_grab(self, tb, info):
+        from PIL import Image
+        action = self._shot_action_now()
+        img = None
+        fd, tmp_name = tempfile.mkstemp(suffix=".png", prefix="snippysnappy-shot-")
+        os.close(fd)
+        tmp = Path(tmp_name)
+        hidden = []
+        try:
+            for item in [h for h, _n in self.handles] + list(getattr(self, "reset_btn_items", None) or []):   # selection handles + the x button
+                self.canvas.itemconfigure(item, state="hidden")
+                hidden.append(item)
+        except tk.TclError:
+            pass
+        from . import constants as _consts
+        cursor_was = getattr(_consts, "CAPTURE_INCLUDE_CURSOR", True)
+        _consts.CAPTURE_INCLUDE_CURSOR = False        # the mouse is on the Screenshot button, not part of the picture
+        try:
+            self.root.update()
+            cx, cy = self.canvas.winfo_rootx(), self.canvas.winfo_rooty()
+            w, h = self.canvas.winfo_width(), self.canvas.winfo_height()
+            x1, y1, x2, y2 = 0, 0, w, h
+            if getattr(self, "sel_coords", None):          # what you are working on: the selection (the whole image unless cropped)
+                a, b = self.img_to_canvas(self.sel_coords[0], self.sel_coords[1])
+                c, d = self.img_to_canvas(self.sel_coords[2], self.sel_coords[3])
+                x1, y1, x2, y2 = max(0, int(a)), max(0, int(b)), min(w, int(round(c))), min(h, int(round(d)))
+            if x2 - x1 < 4 or y2 - y1 < 4:
+                x1, y1, x2, y2 = 0, 0, w, h
+            box = (cx + x1, cy + y1, x2 - x1, y2 - y1)
+            capture_monitor(box[0], box[1], box[2], box[3], tmp)
+            _wait_written(tmp)     # the PNG is written on a background thread
+            with Image.open(tmp) as im:
+                im.load()
+                img = im.copy()
+            log.info(f"Screenshot ({action}) of {box[2]}x{box[3]} at {box[0]},{box[1]}")
+        except Exception:
+            log.exception("Screenshot grab failed")
+            notify("Screenshot failed", "Could not grab the screen - see the log", blocking=False)
+        finally:
+            _consts.CAPTURE_INCLUDE_CURSOR = cursor_was
+            for item in hidden:
+                try:
+                    self.canvas.itemconfigure(item, state="normal")
+                except tk.TclError:
+                    pass
+            tmp.unlink(missing_ok=True)
+            self._shot_busy = False
+            if tb is not None:
+                try:
+                    tb.place(**info)
+                except tk.TclError:
+                    pass
+        if img is None:
+            return
+        try:
+            if action in ("save", "both"):
+                path = _paths_setup.get_dir("sloppysnaps") / f"sloppysnap-{timestamp()}.png"
+                img.save(path)
+                notify("Screenshot saved", f"Saved as {path.name}", blocking=False)
+            if action in ("copy", "both"):
+                fd, cname = tempfile.mkstemp(suffix=".png", prefix="snippysnappy-")
+                os.close(fd)
+                cpath = Path(cname)
+                img.save(cpath)
+                copy_image_to_clipboard(cpath)
+                self.owned_temp_paths.append(cpath)
+                notify("Screenshot copied to clipboard", blocking=False)
+        except Exception:
+            log.exception("Screenshot save/copy failed")
+            notify("Screenshot failed", "Could not save or copy it - see the log", blocking=False)
 
     def _active_tool_name(self):
         """Which of the four Tools-submenu tools is currently active, or None."""

@@ -42,6 +42,8 @@ GNOME/KDE recording on Nix needs GStreamer's plugin path set up, which is easies
 ~/.local/bin/snippysnappy.d/install.sh --uninstall
 ```
 
+Or from the program itself, without remembering where the installer is: `snippysnappy -u` (same as `--update`; options after it go to the installer, e.g. `snippysnappy -u --check`). If `install.sh` has been deleted it is downloaded from GitHub first.
+
 Each update keeps the previous version in `~/.local/bin/snippysnappy.d/backups/` (the newest 3 are kept). Your settings in `~/.config/snippysnappy/config.py` are never touched by updates. Other options: `--yes`, `--no-deps`, `--deps-only`, `--session x11|wayland|both`, `--shortcuts`, `--python PATH`, `--dry-run`, `--local DIR`.
 
 ## Usage
@@ -58,6 +60,34 @@ snippysnappy --version
 ```
 
 `snippysnappy --help` lists everything. To change a setting, edit `~/.config/snippysnappy/config.py`; it is created with every option commented out the first time you run the program.
+
+## Tray icon and bar integration
+
+While any snippysnappy window, pin or recording is open there is a tray icon (it appears about a second after the first window and goes away with the last one). Left click focuses the window you used last; right click lists windows (with their tabs), pins and recordings, and starts a new screenshot / recording / edit with options. Turn it off with `TRAY_ENABLED = False` in `~/.config/snippysnappy/config.py`.
+
+The icon is a standard StatusNotifierItem, so it needs a bar or panel with a tray: XFCE (xfce4-panel 4.16+, its Notification Area; needs dbusmenu support), KDE Plasma, GNOME (AppIndicator extension), waybar's `tray` module, quickshell, ags, hyprpanel and similar.
+
+Anything that can run a command can use the same menu through a control socket (works even with `TRAY_ENABLED = False`):
+
+| command | what it does |
+|---|---|
+| `snippysnappy --tray-menu [CMD]` | pick an entry with fuzzel / wofi / rofi / bemenu / tofi / dmenu (or `CMD`, or `TRAY_LAUNCHER`) |
+| `snippysnappy --tray-status` | `{"text","tooltip","class"}` JSON for a waybar custom module (class: idle, active, recording, inactive) |
+| `snippysnappy --tray-json` | the menu as JSON, with an `id` on every entry (quickshell, eww, scripts) |
+| `snippysnappy --tray-do ID` | run one entry, e.g. `new:rec-full`, `new:shot-window`, `edit-open` |
+
+waybar example:
+
+```json
+"custom/snippysnappy": {
+    "exec": "snippysnappy --tray-status",
+    "return-type": "json",
+    "interval": 3,
+    "format": "snip {text}",
+    "on-click": "snippysnappy --tray-menu",
+    "on-click-right": "snippysnappy --tray-do new:rec"
+}
+```
 
 ## Dependencies
 

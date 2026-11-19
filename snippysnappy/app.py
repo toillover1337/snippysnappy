@@ -262,6 +262,28 @@ def main():
         help=argparse.SUPPRESS,   # internal only - opens an existing film in its own Snippyfilm window (used by the film window's "+ Open File...")
     )
     parser.add_argument(
+        "-u", "--update", action="store_true",
+        help="Update snippysnappy to the latest release (runs the installer's --update; downloads the installer if it is "
+             "missing). Must be the first argument; extra installer options follow, e.g. 'snippysnappy -u --check' or "
+             "'snippysnappy -u --version v1.0.5'.",
+    )
+    parser.add_argument(
+        "--tray-json", action="store_true",
+        help="Print the tray menu of the running snippysnappy as JSON (quickshell, eww, scripts). Needs a running instance.",
+    )
+    parser.add_argument(
+        "--tray-status", action="store_true",
+        help='Print {"text","tooltip","class"} JSON for a waybar custom module (class: idle / active / recording / inactive).',
+    )
+    parser.add_argument(
+        "--tray-menu", nargs="*", metavar="CMD", default=None,
+        help="Pick a tray menu entry with fuzzel/wofi/rofi/bemenu/dmenu (or CMD, or TRAY_LAUNCHER) - bind it to a bar click.",
+    )
+    parser.add_argument(
+        "--tray-do", metavar="ID", default=None,
+        help="Run one tray menu entry by its id (ids are listed by --tray-json), e.g. --tray-do new:rec-full.",
+    )
+    parser.add_argument(
         "--debug", action="store_true",
         help="Log at DEBUG level for this run only (overrides LOG_LEVEL in config.py; nothing is saved). "
              "Also applies to pins/film windows this run starts.",

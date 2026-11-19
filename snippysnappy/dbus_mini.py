@@ -73,6 +73,8 @@ class _W:
             sig, val = v
             self.put("g", sig)
             self.put(sig, val)
+        elif c == "a" and t == "ay" and isinstance(v, (bytes, bytearray)):
+            self.b += struct.pack("<I", len(v)) + bytes(v)
         elif c == "a":
             inner = t[1:]
             at = len(self.b)
@@ -157,6 +159,7 @@ class Bus:
         self._buf = bytearray()
         self._fds = []
         self._queue = []
+        self._incoming = []
         self._serial = 0
         self._auth()
         self.unique_name = self.call("org.freedesktop.DBus", "/org/freedesktop/DBus",
@@ -241,7 +244,7 @@ class Bus:
         sig = fields.get(8, "")
         br = _R(raw, hlen)
         body = [br.get(t) for t in _split_sig(sig)]
-        return {"type": mtype, "fields": fields, "body": body}
+        return {"type": mtype, "fields": fields, "body": body, "serial": struct.unpack_from("<I", raw, 8)[0]}
 
     # -- api
     def call(self, dest, path, iface, member, sig="", args=(), timeout=30.0):
@@ -255,6 +258,8 @@ class Bus:
                 return m["body"]
             if m["type"] == 4:
                 self._queue.append(m)
+            elif m["type"] == 1:
+                self._incoming.append(m)      # a method call for a service we export (see dbus_service.py)
 
     def add_match(self, rule):
         self.call("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "AddMatch", "s", (rule,))

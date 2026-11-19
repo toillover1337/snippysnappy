@@ -70,6 +70,8 @@ TIPS = {
     "Measure": "Measure distances with boxes and lines",
     "Magnify": "Show a magnifier lens over the picture",
     "Pin": "Pin a region of the screen on your desktop",
+    "Screenshot": "Grab the picture as it looks now (measure boxes, pinned lenses) and save / copy it - choose which with the arrow",
+    "\u25be": "Choose what Screenshot does: Save, Copy, or Copy and save",
     "Pins (0)": "Show or hide the pins opened from this window",
     ("image", "measure", "Clear"): "Remove all measurement boxes",
     ("image", "pin", "Clear"): "Close all pins opened from this window",

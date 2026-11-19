@@ -334,6 +334,11 @@ def _try_bind_as_hub():
     _coord["client_id"] = "hub"
     _coord["server_socket"] = srv
     log.info(f"Coordinator: this process is the hub ({SOCKET_PATH})")
+    try:
+        from .tray import start_tray      # the tray icon + control socket live in whichever process is the hub
+        start_tray(_coord["root"])
+    except Exception:
+        log.exception("Tray: could not start (non-fatal)")
     return True
 
 
@@ -375,6 +380,11 @@ def shutdown_coordinator():
             pass
         _coord["poll_job"] = None
     if _coord["role"] == "hub":
+        try:
+            from .tray import stop_tray
+            stop_tray()
+        except Exception:
+            pass
         try:
             SOCKET_PATH.unlink(missing_ok=True)
         except Exception:
@@ -745,7 +755,7 @@ def focus_local_window(app):
             log.exception(f"View: direct X11 focus grab failed for window {win_id} ({label}) (non-fatal)")
 
 
-def request_remote_focus(remote_client_id, remote_window_id):
+def request_remote_focus(remote_client_id, remote_window_id, tab_index=None):
     """Ask another process to bring one of ITS windows to the front - the
     remote-window counterpart of focus_local_window(), routed through the
     same hub/client messaging merge_request already uses."""
@@ -756,6 +766,8 @@ def request_remote_focus(remote_client_id, remote_window_id):
         "type": "focus_request",
         "target_client_id": remote_client_id, "target_window_id": remote_window_id,
     }
+    if tab_index is not None:      # tray menu: also switch that window to this tab
+        msg["tab_index"] = int(tab_index)
     log.info(f"View: requesting focus on remote window {remote_window_id} (client {remote_client_id})")
     _send_to_hub_or_self(msg)
 
@@ -1058,6 +1070,8 @@ def _handle_incoming_merge_message(msg):
             log.warning(f"Coordinator: focus_request for unknown window_id={msg['target_window_id']!r} in this process - phantom/stale roster entry (window/pin already closed?); ignoring")
             return
         focus_local_window(target)
+        if msg.get("tab_index") is not None and hasattr(target, "switch_to_document"):
+            target.switch_to_document(int(msg["tab_index"]))
     elif mtype == "pin_close_request":
         target_pin = _find_local_pin(msg["target_window_id"])
         if target_pin is None:

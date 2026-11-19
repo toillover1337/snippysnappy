@@ -98,6 +98,12 @@ changed - everything below is commented out and has no effect as-is.
 # PIN_WAYLAND_OPACITY = "auto"   # "auto" | "native" | "simulated" - how the pin opacity slider works on Wayland
 # PLUGINS_ENABLED = True         # False = never load plugin files (extra audio/video effects)
 # PLUGIN_DIR = None              # None = ~/.config/snippysnappy/plugins (created automatically)
+# SCREENSHOT_DEFAULT_ACTION = "copy"   # Measure/Magnify Screenshot button: "save", "copy" or "both"
+# TRAY_ENABLED = True            # tray icon while snippysnappy is open (appears with the first window, goes with the last)
+# TRAY_IPC = True                # control socket for --tray-json / --tray-status / --tray-menu / --tray-do (waybar, quickshell, scripts)
+# TRAY_LAUNCHER = ""             # menu program for --tray-menu, e.g. "fuzzel --dmenu" (empty = auto-detect)
+# TRAY_START_DELAY_MS = 700      # icon appears this long after the first window opens
+# TRAY_HIDE_DELAY_MS = 1500      # icon goes this long after the last window/pin/recording closes
 '''
 
 

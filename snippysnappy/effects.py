@@ -50,6 +50,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 from .logging_setup import log
@@ -178,6 +179,14 @@ def plugin_status():
     return dict(_PLUGINS)
 
 
+_clip_cache = threading.local()
+
+
+def set_clip_cache(path):
+    """Chunked preview: render_clip() results are kept in this folder and reused (None turns it off)."""
+    _clip_cache.dir = path
+
+
 class Ctx:
     """What build() receives."""
 
@@ -230,6 +239,15 @@ class Ctx:
         fps = self.clip_fps()
         n = self.frame_count(fps)
         path = os.path.join(self.workdir(), f"{name}_{self._tag}.mov")
+        cdir = getattr(_clip_cache, "dir", None)
+        if cdir:        # chunked preview: one render of this clip is reused by every chunk (and every refresh) that needs it
+            import hashlib
+            key = hashlib.sha1(repr((self.eff.id, sorted(self.p.items()), round(self.start, 4), round(self.end, 4),
+                                     int(w), int(h), name, round(fps, 4), n)).encode()).hexdigest()[:20]
+            final = os.path.join(cdir, f"fxclip_{key}.mov")
+            if os.path.exists(final):
+                return final
+            path = os.path.join(cdir, f"fxclip_{key}.part.mov")
         cmd = ["ffmpeg", "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", f"{int(w)}x{int(h)}",
                "-r", f"{fps:.4f}", "-i", "-", "-c:v", "png", "-pix_fmt", "rgba", path]
         with tempfile.TemporaryFile() as err:
@@ -249,6 +267,9 @@ class Ctx:
             if rc != 0:
                 err.seek(0)
                 raise RuntimeError("ffmpeg could not write the effect clip: " + err.read().decode("utf-8", "replace")[-300:])
+        if cdir:
+            os.replace(path, final)
+            return final
         return path
 
     def overlay_clips(self, layers):

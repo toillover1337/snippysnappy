@@ -353,6 +353,15 @@ TEMP_DIR = None          # None -> ~/.cache/snippysnappy/tmp
 TEMP_KEEP_HOURS = 24     # a finished process's temp folder is kept this
                          # long before the next startup deletes it.
 
+SCREENSHOT_DEFAULT_ACTION = "copy"   # Measure / Magnify "Screenshot" button: "save" | "copy" | "both" (the arrow next to it changes it for this window)
+
+# ---- tray icon / control interface (see tray.py) ----
+TRAY_ENABLED = True          # show the tray icon (StatusNotifierItem) while snippysnappy is open; it exits with the last window/pin
+TRAY_IPC = True              # keep the control socket for `snippysnappy --tray-json / --tray-status / --tray-menu / --tray-do` (waybar, quickshell, scripts) even when TRAY_ENABLED = False
+TRAY_LAUNCHER = ""           # menu program for --tray-menu, e.g. "fuzzel --dmenu" (empty = first of fuzzel, wofi, rofi, bemenu, tofi, dmenu found)
+TRAY_START_DELAY_MS = 700    # the icon appears this long after the first window opens (no flash for a quick screenshot)
+TRAY_HIDE_DELAY_MS = 1500    # ... and disappears this long after the last window/pin/recording is gone
+
 globals().update(load_user_overrides(globals()))
 
 from .logging_setup import attach_file_logging
